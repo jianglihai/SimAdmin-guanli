@@ -1017,6 +1017,19 @@
                         return;
                     }
                     authNeedsSetup = false;
+                } else {
+                    // 登录模式：先用输入的主密码验证（调 devices 接口），失败则拒绝进入
+                    try {
+                        const res = await fetch('api.php?action=devices&access_password=' + encodeURIComponent(pw));
+                        const json = await res.json().catch(() => null);
+                        if (!json || json.status !== 'ok') {
+                            showToast('⚠ 主密码错误，请重试');
+                            return; // 不关闭弹窗
+                        }
+                    } catch (e) {
+                        showToast('⚠ 验证失败，请重试');
+                        return;
+                    }
                 }
                 setAccessPassword(pw);
                 closeModal('authModal');
