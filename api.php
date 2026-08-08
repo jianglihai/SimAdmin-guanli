@@ -83,6 +83,23 @@ function json_out($status, $message, $data = null) {
     exit;
 }
 
+/** 确保 data 目录存在（返回目录路径） */
+function ensure_data_dir($dir) {
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0755, true);
+    }
+    return $dir;
+}
+
+/** 写 JSON 文件（自动建目录 + 权限收紧） */
+function write_json_file($file, $data, $flags = 0) {
+    if (!is_dir(dirname($file))) {
+        @mkdir(dirname($file), 0755, true);
+    }
+    file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE | $flags), LOCK_EX);
+    @chmod($file, 0600); // 含敏感数据，仅属主可读写
+}
+
 function read_body() {
     $raw = file_get_contents('php://input');
     $json = json_decode($raw, true);
@@ -147,15 +164,12 @@ function get_session_cookie($url) {
 }
 
 function save_session_cookie($url, $cookie) {
-    if (!is_dir(SESSION_DIR)) {
-        @mkdir(SESSION_DIR, 0755, true);
-    }
+    ensure_data_dir(SESSION_DIR);
     $file = session_file($url);
-    file_put_contents($file, json_encode([
+    write_json_file($file, [
         'cookie' => $cookie,
         'expires' => time() + SESSION_TTL,
-    ]), LOCK_EX);
-    @chmod($file, 0600); // 会话含敏感 Cookie，仅属主可读写
+    ]);
 }
 
 function clear_session($url) {
@@ -369,12 +383,8 @@ try {
         if (strlen($password) < 4) {
             json_out('error', '主密码至少 4 位');
         }
-        if (!is_dir(dirname(CONFIG_FILE))) {
-            @mkdir(dirname(CONFIG_FILE), 0755, true);
-        }
         // 哈希存储（password_hash），文件泄露也无法还原明文
-        file_put_contents(CONFIG_FILE, json_encode(['access_password' => password_hash($password, PASSWORD_DEFAULT)], JSON_UNESCAPED_UNICODE), LOCK_EX);
-        @chmod(CONFIG_FILE, 0600);
+        write_json_file(CONFIG_FILE, ['access_password' => password_hash($password, PASSWORD_DEFAULT)]);
         json_out('ok', '主密码已设置');
     }
 
@@ -473,11 +483,7 @@ try {
                     'password' => isset($d['password']) ? (string) $d['password'] : '',
                 ];
             }
-            if (!is_dir(dirname(DEVICES_FILE))) {
-                @mkdir(dirname(DEVICES_FILE), 0755, true);
-            }
-            file_put_contents(DEVICES_FILE, json_encode($clean, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
-            @chmod(DEVICES_FILE, 0600);
+            write_json_file(DEVICES_FILE, $clean, JSON_PRETTY_PRINT);
             json_out('ok', '已保存 ' . count($clean) . ' 台设备', ['count' => count($clean)]);
             break;
 
@@ -502,9 +508,7 @@ try {
                 if ($devId === '' || $maxId < 0) continue;
                 $clean[$devId] = $maxId;
             }
-            if (!is_dir(dirname(SMS_SEEN_FILE))) {
-                @mkdir(dirname(SMS_SEEN_FILE), 0755, true);
-            }
+            ensure_data_dir(dirname(SMS_SEEN_FILE));
             // 合并写入（取较大值，避免旧端覆盖新端）；flock 保证读-改-写原子性
             $existing = [];
             $fp = fopen(SMS_SEEN_FILE, 'c+');

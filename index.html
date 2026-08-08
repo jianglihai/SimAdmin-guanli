@@ -528,10 +528,11 @@
         }
 
         // ===== 拉取单台设备全部状态 =====
-        async function fetchDevice(dev) {
+        // opts.silent=true：轮询模式，只局部更新该卡片（不闪整页）
+        async function fetchDevice(dev, opts = {}) {
             dev.loading = true;
             dev.error = null;
-            renderAll();
+            if (!opts.silent) renderAll();
             try {
                 await apiLogin(dev);
                 const [health, device, sim, network, stats] = await Promise.all([
@@ -574,7 +575,14 @@
                 console.error(`[${dev.name}]`, e);
             } finally {
                 dev.loading = false;
-                renderAll();
+                if (opts.silent) {
+                    // 轮询模式：局部更新该卡片 + 统计，避免整页重建闪烁
+                    const card = $('card-' + dev.id);
+                    if (card) card.outerHTML = renderDeviceCard(dev);
+                    renderStats();
+                } else {
+                    renderAll();
+                }
             }
         }
 
@@ -646,7 +654,7 @@
             const statusTxt = isError ? '连接失败' : isOnline ? '在线' : '离线';
 
             return `
-            <div class="device-card ${isError ? 'error-card' : ''}">
+            <div class="device-card ${isError ? 'error-card' : ''}" id="card-${dev.id}">
                 <div class="dev-head">
                     <div class="dev-avatar ${isError ? 'error' : !isOnline ? 'offline' : ''}">${isError ? '⚠️' : '📡'}</div>
                     <div>
@@ -1005,20 +1013,6 @@
 
         // ===== 主密码（首次设置 / 登录） =====
         let authNeedsSetup = false; // 服务器尚未设置主密码
-        async function checkAuthState() {
-            try {
-                const res = await fetch('api.php?action=health');
-                const json = await res.json().catch(() => null);
-                if (json && json.status === 'ok') {
-                    authNeedsSetup = !json.data.access_protected;
-                    if (authNeedsSetup) {
-                        openAuthModal();
-                    } else if (!accessPassword) {
-                        openAuthModal();
-                    }
-                }
-            } catch (e) { /* 服务器不可用 */ }
-        }
         function openAuthModal() {
             // 关闭其他弹窗，只保留主密码弹窗（防止绕过）
             document.querySelectorAll('.modal-overlay.active').forEach(m => {
@@ -1122,10 +1116,10 @@
                 if (d.data && !d.error) refreshSms(d, { panel: true });
             });
         }, 10000);
-        // 设备状态自动刷新：每 30 秒刷新所有设备状态（离线设备及时发现）
+        // 设备状态自动刷新：每 30 秒静默刷新所有设备状态（局部更新卡片，不闪整页）
         setInterval(() => {
             if (document.visibilityState === 'hidden') return; // 页面隐藏时不刷
-            devices.forEach(d => fetchDevice(d).catch(() => {}));
+            devices.forEach(d => fetchDevice(d, { silent: true }).catch(() => {}));
         }, 30000);
     </script>
 </body>
