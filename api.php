@@ -30,7 +30,6 @@ define('SMS_SEEN_FILE', __DIR__ . '/data/sms_seen.json');
 define('CONFIG_FILE', __DIR__ . '/data/config.json');
 define('SESSION_TTL', 1800); // 会话缓存 30 分钟
 define('REQUEST_TIMEOUT', 15);
-define('STATUS_TTL', 30);    // 设备状态缓存 30 秒（自动刷新节流）
 
 // ---------- 主密码保护 ----------
 // 首次访问时若未设置主密码，允许 setup 接口设置；设置后所有接口需带主密码
@@ -47,7 +46,14 @@ function access_password_set() {
 function check_access($provided) {
     $stored = get_access_password();
     if ($stored === '') return true; // 未设置主密码，暂不校验（首次部署）
-    return is_string($provided) && hash_equals($stored, $provided);
+    // 兼容旧明文：若存储的是明文（非哈希）则直接比较，否则用 password_verify
+    if (is_string($provided)) {
+        if (strpos($stored, '$2y$') === 0 || strpos($stored, '$argon2') === 0) {
+            return password_verify($provided, $stored);
+        }
+        return hash_equals($stored, $provided);
+    }
+    return false;
 }
 
 // 从请求中提取主密码：POST body 的 access_password 或 GET 的 access_password
@@ -109,12 +115,20 @@ function mb_cut($str, $max) {
     $len = 0;
     $out = '';
     $chars = preg_split('//u', $str, -1, PREG_SPLIT_NO_EMPTY);
+    if (!is_array($chars)) return mb_substr_fallback($str, $max); // 非法 UTF-8 兜底
     foreach ($chars as $c) {
         if ($len >= $max) break;
         $out .= $c;
         $len++;
     }
     return $out;
+}
+
+/**
+ * 非法 UTF-8 时的字节级截断兜底
+ */
+function mb_substr_fallback($str, $max) {
+    return strlen($str) > $max ? substr($str, 0, $max) : $str;
 }
 
 function session_file($url) {
@@ -358,7 +372,8 @@ try {
         if (!is_dir(dirname(CONFIG_FILE))) {
             @mkdir(dirname(CONFIG_FILE), 0755, true);
         }
-        file_put_contents(CONFIG_FILE, json_encode(['access_password' => $password], JSON_UNESCAPED_UNICODE), LOCK_EX);
+        // 哈希存储（password_hash），文件泄露也无法还原明文
+        file_put_contents(CONFIG_FILE, json_encode(['access_password' => password_hash($password, PASSWORD_DEFAULT)], JSON_UNESCAPED_UNICODE), LOCK_EX);
         @chmod(CONFIG_FILE, 0600);
         json_out('ok', '主密码已设置');
     }

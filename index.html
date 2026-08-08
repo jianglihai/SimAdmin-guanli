@@ -525,8 +525,7 @@
                 };
                 dev.error = null;
                 dev.lastUpdate = new Date();
-                // 后台拉取短信用于未读角标（不阻塞主状态）
-                refreshSms(dev);
+                // 短信由独立 10 秒轮询负责（fetchDevice 不再重复拉取，避免每 30 秒拉两次）
             } catch (e) {
                 dev.data = null;
                 dev.error = e.message || String(e);
