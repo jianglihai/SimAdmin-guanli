@@ -7,20 +7,32 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>SimAdmin 多设备管理</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2300d2ff'/%3E%3Cstop offset='1' stop-color='%233a7bd5'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M20 44 L32 16 L44 44' stroke='white' stroke-width='4.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M26 53 h12' stroke='white' stroke-width='4.5' stroke-linecap='round'/%3E%3C/svg%3E">
     <style>
         :root {
             --bg: #0d1117; --bg-2: #161b22; --bg-3: #1c2333;
             --panel: rgba(255, 255, 255, 0.04); --border: rgba(255, 255, 255, 0.08);
+            --border-soft: rgba(255, 255, 255, 0.04);
             --text: #e6edf3; --muted: #8b949e;
             --accent: #00d2ff; --accent-2: #3a7bd5;
             --green: #3fb950; --red: #f85149; --yellow: #d29922;
             --radius: 12px;
         }
+        /* 亮色主题（手动切换，localStorage 记忆） */
+        html[data-theme="light"] {
+            --bg: #f2f4f8; --bg-2: #ffffff; --bg-3: #e8ecf2;
+            --panel: rgba(15, 23, 42, 0.04); --border: rgba(15, 23, 42, 0.12);
+            --border-soft: rgba(15, 23, 42, 0.07);
+            --text: #1f2328; --muted: #57606a;
+            --accent: #0088cc; --accent-2: #2f6fae;
+            --green: #1a7f37; --red: #cf222e; --yellow: #9a6700;
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-            background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+            background: linear-gradient(135deg, var(--bg) 0%, var(--bg-2) 100%);
             color: var(--text); min-height: 100vh; padding: 20px;
+            transition: background 0.3s ease, color 0.3s ease;
         }
         .container { max-width: 1500px; margin: 0 auto; }
 
@@ -42,7 +54,7 @@
             font-size: 0.85rem; transition: all 0.2s ease;
             display: inline-flex; align-items: center; gap: 6px;
         }
-        .btn:hover { background: rgba(255, 255, 255, 0.1); }
+        .btn:hover { background: var(--panel); border-color: var(--accent); }
         .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: none; color: #fff; }
         .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 210, 255, 0.35); }
         .btn-danger { border-color: rgba(248, 81, 73, 0.4); color: var(--red); }
@@ -113,7 +125,7 @@
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
         .dev-body { padding: 14px 18px; }
-        .kv-row { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 0.83rem; }
+        .kv-row { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--border-soft); font-size: 0.83rem; }
         .kv-row:last-child { border-bottom: none; }
         .kv-row .k { color: var(--muted); }
         .kv-row .v { text-align: right; font-weight: 500; }
@@ -121,13 +133,13 @@
 
         .signal-disp { display: inline-flex; align-items: center; gap: 8px; }
         .signal-bars { display: inline-flex; gap: 3px; align-items: flex-end; }
-        .signal-bars span { width: 4px; border-radius: 1px; background: rgba(255,255,255,0.15); }
+        .signal-bars span { width: 4px; border-radius: 1px; background: var(--border); }
         .signal-bars span.on { background: var(--accent); }
         .signal-strong { color: var(--green); }
         .signal-mid { color: var(--yellow); }
         .signal-weak { color: var(--red); }
 
-        .meter { height: 5px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; margin-top: 5px; }
+        .meter { height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 5px; }
         .meter > div { height: 100%; border-radius: 3px; transition: width 0.5s; }
         .meter.cpu > div { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
         .meter.mem > div { background: linear-gradient(90deg, #f0883e, #f85149); }
@@ -196,7 +208,7 @@
         .sms-list { max-height: 380px; overflow-y: auto; margin-bottom: 14px; border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
         .sms-msg { display: flex; margin-bottom: 10px; }
         .sms-msg .bubble { max-width: 80%; padding: 9px 12px; border-radius: 12px; font-size: 0.83rem; line-height: 1.5; word-break: break-word; }
-        .sms-msg.incoming .bubble { background: rgba(255,255,255,0.08); border-bottom-left-radius: 4px; }
+        .sms-msg.incoming .bubble { background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
         .sms-msg.outgoing { justify-content: flex-end; }
         .sms-msg.outgoing .bubble { background: rgba(0, 210, 255, 0.15); border: 1px solid rgba(0, 210, 255, 0.25); border-bottom-right-radius: 4px; }
         .sms-msg .meta { display: flex; gap: 8px; margin-bottom: 3px; font-size: 0.7rem; color: var(--muted); }
@@ -232,6 +244,7 @@
             </div>
             <div class="topbar-actions">
                 <span class="refresh-indicator" id="refreshIndicator"></span>
+                <button class="btn" id="themeToggle" onclick="toggleTheme()" title="切换白天/黑夜模式">🌙 夜间</button>
                 <button class="btn" onclick="refreshAll()">🔄 刷新全部</button>
                 <button class="btn" onclick="openManageDevices()">⚙️ 管理设备</button>
                 <button class="btn btn-primary" onclick="openAddDevice()">＋ 添加设备</button>
@@ -315,6 +328,21 @@
 
     <script>
         'use strict';
+
+        // ===== 主题（白天/黑夜，localStorage 记忆） =====
+        const THEME_KEY = 'simadmin_theme';
+        function applyTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem(THEME_KEY, theme);
+            const btn = $('themeToggle');
+            if (btn) btn.textContent = theme === 'light' ? '🌙 夜间' : '☀️ 白天';
+        }
+        function toggleTheme() {
+            const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+            applyTheme(cur === 'light' ? 'dark' : 'light');
+        }
+        // 初始化主题（默认黑夜，跟随记忆）
+        applyTheme(localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark');
 
         // ===== 配置存储 =====
         const STORAGE_KEY = 'simadmin_multi_devices'; // 保留 key 避免旧数据干扰（已不再读写）
