@@ -840,7 +840,7 @@
                 const res = await fetch('api.php?action=action', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: dev.url, path: '/api/sms/send', body: { phone_number: num, content } })
+                    body: JSON.stringify({ url: dev.url, path: '/api/sms/send', body: { phone_number: num, content }, ...(accessPassword ? { access_password: accessPassword } : {}) })
                 });
                 const json = await res.json().catch(() => null);
                 if (!json || json.status !== 'ok') {
