@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>SimAdmin 多设备管理</title>
+    <style>
+        :root {
+            --bg: #0d1117; --bg-2: #161b22; --bg-3: #1c2333;
+            --panel: rgba(255, 255, 255, 0.04); --border: rgba(255, 255, 255, 0.08);
+            --text: #e6edf3; --muted: #8b949e;
+            --accent: #00d2ff; --accent-2: #3a7bd5;
+            --green: #3fb950; --red: #f85149; --yellow: #d29922;
+            --radius: 12px;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+            color: var(--text); min-height: 100vh; padding: 20px;
+        }
+        .container { max-width: 1500px; margin: 0 auto; }
+
+        .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+        .brand { display: flex; align-items: center; gap: 12px; }
+        .brand-logo {
+            width: 42px; height: 42px; border-radius: 10px;
+            background: linear-gradient(135deg, var(--accent), var(--accent-2));
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.4rem; box-shadow: 0 4px 16px rgba(0, 210, 255, 0.3);
+        }
+        .brand h1 { font-size: 1.3rem; font-weight: 600; }
+        .brand p { color: var(--muted); font-size: 0.8rem; margin-top: 2px; }
+        .topbar-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+        .btn {
+            padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border);
+            background: var(--panel); color: var(--text); cursor: pointer;
+            font-size: 0.85rem; transition: all 0.2s ease;
+            display: inline-flex; align-items: center; gap: 6px;
+        }
+        .btn:hover { background: rgba(255, 255, 255, 0.1); }
+        .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: none; color: #fff; }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 210, 255, 0.35); }
+        .btn-danger { border-color: rgba(248, 81, 73, 0.4); color: var(--red); }
+        .btn-danger:hover { background: rgba(248, 81, 73, 0.15); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+        /* 短信按钮未读状态 */
+        .btn-sms-unread {
+            border-color: rgba(248, 81, 73, 0.55);
+            background: rgba(248, 81, 73, 0.12);
+            color: var(--red);
+            animation: badgePulse 1.5s infinite;
+        }
+        .sms-badge-num {
+            display: inline-flex; align-items: center; justify-content: center;
+            min-width: 18px; height: 18px; padding: 0 5px; border-radius: 10px;
+            background: var(--red); color: #fff; font-size: 0.7rem;
+        }
+        @keyframes badgePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 24px; }
+        .stat-card {
+            background: var(--panel); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 16px 18px; transition: all 0.3s ease;
+        }
+        .stat-card:hover { border-color: rgba(0, 210, 255, 0.3); transform: translateY(-2px); }
+        .stat-label { color: var(--muted); font-size: 0.78rem; margin-bottom: 6px; }
+        .stat-value { font-size: 1.6rem; font-weight: 700; }
+        .stat-sub { color: var(--muted); font-size: 0.75rem; margin-top: 4px; }
+        .stat-value.green { color: var(--green); }
+        .stat-value.red { color: var(--red); }
+        .stat-value.yellow { color: var(--yellow); }
+        .stat-value.accent { color: var(--accent); }
+
+        .section-title { font-size: 1rem; font-weight: 600; margin: 20px 0 12px; display: flex; align-items: center; gap: 8px; }
+        .section-title .hint { font-size: 0.75rem; color: var(--muted); font-weight: 400; }
+
+        /* ===== 设备卡片网格 ===== */
+        .device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+        .device-card {
+            background: var(--bg-2); border: 1px solid var(--border);
+            border-radius: var(--radius); overflow: hidden; transition: all 0.25s ease;
+        }
+        .device-card:hover { border-color: rgba(0, 210, 255, 0.35); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
+        .device-card.error-card { border-color: rgba(248, 81, 73, 0.5); }
+        .device-card.error-card:hover { border-color: var(--red); }
+
+        .dev-head { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+        .dev-avatar {
+            width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center; font-size: 1.2rem;
+            background: rgba(0, 210, 255, 0.12);
+        }
+        .dev-avatar.offline { background: rgba(139, 148, 158, 0.12); filter: grayscale(1); }
+        .dev-avatar.error { background: rgba(248, 81, 73, 0.12); }
+        .dev-name { font-weight: 600; font-size: 0.95rem; }
+        .dev-url { color: var(--muted); font-size: 0.75rem; font-family: Consolas, monospace; margin-top: 2px; }
+        .dev-status { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+
+        .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; }
+        .status-badge::before { content: ''; width: 7px; height: 7px; border-radius: 50%; }
+        .status-online { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+        .status-online::before { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 2s infinite; }
+        .status-offline { background: rgba(139, 148, 158, 0.15); color: var(--muted); }
+        .status-offline::before { background: var(--muted); }
+        .status-error { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+        .status-error::before { background: var(--red); animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+        .dev-body { padding: 14px 18px; }
+        .kv-row { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 0.83rem; }
+        .kv-row:last-child { border-bottom: none; }
+        .kv-row .k { color: var(--muted); }
+        .kv-row .v { text-align: right; font-weight: 500; }
+        .kv-row .v.mono { font-family: Consolas, monospace; font-size: 0.78rem; }
+
+        .signal-disp { display: inline-flex; align-items: center; gap: 8px; }
+        .signal-bars { display: inline-flex; gap: 3px; align-items: flex-end; }
+        .signal-bars span { width: 4px; border-radius: 1px; background: rgba(255,255,255,0.15); }
+        .signal-bars span.on { background: var(--accent); }
+        .signal-strong { color: var(--green); }
+        .signal-mid { color: var(--yellow); }
+        .signal-weak { color: var(--red); }
+
+        .meter { height: 5px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; margin-top: 5px; }
+        .meter > div { height: 100%; border-radius: 3px; transition: width 0.5s; }
+        .meter.cpu > div { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+        .meter.mem > div { background: linear-gradient(90deg, #f0883e, #f85149); }
+
+        .dev-actions { display: flex; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); }
+        .dev-actions .btn { flex: 1; justify-content: center; font-size: 0.8rem; padding: 7px 10px; }
+
+        /* OTA 更新提示条 */
+        .ota-banner {
+            display: flex; align-items: center; justify-content: space-between; gap: 8px;
+            background: rgba(210, 153, 34, 0.15); border: 1px solid rgba(210, 153, 34, 0.4);
+            color: var(--yellow); border-radius: 8px; padding: 8px 12px;
+            font-size: 0.78rem; margin-bottom: 10px;
+        }
+
+        .empty-state { text-align: center; padding: 60px 20px; color: var(--muted); }
+        .empty-state .big { font-size: 3rem; margin-bottom: 14px; }
+
+        /* ===== 弹窗 ===== */
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 100;
+            display: none; align-items: center; justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: var(--bg-2); border: 1px solid var(--border); border-radius: 14px;
+            width: min(520px, 92vw); padding: 24px; max-height: 88vh; overflow-y: auto;
+        }
+        .modal h2 { font-size: 1.05rem; margin-bottom: 18px; }
+        .form-group { margin-bottom: 14px; }
+        .form-group label { display: block; color: var(--muted); font-size: 0.78rem; margin-bottom: 6px; }
+        .form-group input {
+            width: 100%; padding: 10px 12px; border-radius: 8px;
+            border: 1px solid var(--border); background: var(--panel); color: var(--text);
+            outline: none; font-size: 0.88rem; transition: border 0.2s;
+        }
+        .form-group input:focus { border-color: var(--accent); }
+        .form-group .tip { color: var(--muted); font-size: 0.72rem; margin-top: 4px; }
+        .form-actions { display: flex; gap: 10px; margin-top: 20px; }
+        .form-actions .btn { flex: 1; justify-content: center; }
+
+        .device-list-item {
+            display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+            border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px;
+            font-size: 0.82rem;
+        }
+        .device-list-item .name { font-weight: 500; }
+        .device-list-item .addr { color: var(--muted); font-family: Consolas, monospace; font-size: 0.75rem; }
+        .device-list-item .actions { margin-left: auto; display: flex; gap: 6px; }
+
+        /* ===== Toast ===== */
+        .toast {
+            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+            background: var(--bg-3); border: 1px solid var(--border); color: var(--text);
+            padding: 12px 24px; border-radius: 10px; font-size: 0.85rem; z-index: 200;
+            opacity: 0; transition: all 0.3s; box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+            max-width: 80vw;
+        }
+        .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+        .refresh-indicator { font-size: 0.75rem; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+        .spin-icon { display: inline-block; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ===== 短信弹窗 ===== */
+        .sms-list { max-height: 380px; overflow-y: auto; margin-bottom: 14px; border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+        .sms-msg { display: flex; margin-bottom: 10px; }
+        .sms-msg .bubble { max-width: 80%; padding: 9px 12px; border-radius: 12px; font-size: 0.83rem; line-height: 1.5; word-break: break-word; }
+        .sms-msg.incoming .bubble { background: rgba(255,255,255,0.08); border-bottom-left-radius: 4px; }
+        .sms-msg.outgoing { justify-content: flex-end; }
+        .sms-msg.outgoing .bubble { background: rgba(0, 210, 255, 0.15); border: 1px solid rgba(0, 210, 255, 0.25); border-bottom-right-radius: 4px; }
+        .sms-msg .meta { display: flex; gap: 8px; margin-bottom: 3px; font-size: 0.7rem; color: var(--muted); }
+        .sms-msg .meta .num { font-weight: 600; color: var(--text); }
+        .sms-msg.incoming.unread .bubble { border: 1px solid rgba(0, 210, 255, 0.5); box-shadow: 0 0 8px rgba(0, 210, 255, 0.15); }
+        .sms-empty { text-align: center; color: var(--muted); padding: 30px 0; font-size: 0.85rem; }
+        .sms-reply-box { display: flex; gap: 8px; }
+        .sms-reply-box input, .sms-reply-box textarea {
+            background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+            color: var(--text); padding: 9px 11px; font-size: 0.83rem; outline: none;
+        }
+        .sms-reply-box input:focus, .sms-reply-box textarea:focus { border-color: var(--accent); }
+        .sms-reply-box input { width: 130px; flex-shrink: 0; }
+        .sms-reply-box textarea { flex: 1; resize: vertical; min-height: 40px; font-family: inherit; }
+        .sms-reply-box .btn { align-self: stretch; }
+
+        @media (max-width: 768px) {
+            .device-grid { grid-template-columns: 1fr; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 顶部栏 -->
+        <header class="topbar">
+            <div class="brand">
+                <div class="brand-logo">📡</div>
+                <div>
+                    <h1>SimAdmin 多设备管理</h1>
+                    <p>Multi-device Console · 聚合管理所有 SimAdmin 设备</p>
+                </div>
+            </div>
+            <div class="topbar-actions">
+                <span class="refresh-indicator" id="refreshIndicator"></span>
+                <button class="btn" onclick="refreshAll()">🔄 刷新全部</button>
+                <button class="btn" onclick="openManageDevices()">⚙️ 管理设备</button>
+                <button class="btn btn-primary" onclick="openAddDevice()">＋ 添加设备</button>
+            </div>
+        </header>
+
+        <!-- 统计卡片 -->
+        <section class="stats-grid" id="statsGrid"></section>
+
+        <!-- 设备网格 -->
+        <div class="section-title">
+            <span>📱 设备列表</span>
+            <span class="hint" id="listHint"></span>
+        </div>
+        <div class="device-grid" id="deviceGrid"></div>
+    </div>
+
+    <!-- 添加设备弹窗 -->
+    <div class="modal-overlay" id="addModal">
+        <div class="modal">
+            <h2>＋ 添加 SimAdmin 设备</h2>
+            <div class="form-group">
+                <label>设备名称</label>
+                <input type="text" id="addName" placeholder="如：客厅随身WiFi">
+            </div>
+            <div class="form-group">
+                <label>设备 IP 地址</label>
+                <input type="text" id="addIp" placeholder="192.168.68.1">
+                <div class="tip">默认补全为 http://{IP}:3000，可带端口如 192.168.68.1:8080</div>
+            </div>
+            <div class="form-group">
+                <label>管理员密码</label>
+                <input type="password" id="addPassword" placeholder="设备管理员密码">
+                <div class="tip">仅保存在本浏览器 localStorage，代理用于登录获取会话</div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" onclick="confirmAddDevice()">添加</button>
+                <button class="btn" onclick="closeModal('addModal')">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 管理设备弹窗 -->
+    <div class="modal-overlay" id="manageModal">
+        <div class="modal">
+            <h2>⚙️ 管理设备列表</h2>
+            <div id="manageList"></div>
+            <div class="form-actions">
+                <button class="btn" onclick="closeModal('manageModal')">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 短信弹窗 -->
+    <div class="modal-overlay" id="smsModal">
+        <div class="modal" style="width:min(640px,94vw)">
+            <h2 id="smsTitle">💬 短信</h2>
+            <div id="smsBody" style="min-height:200px"></div>
+            <div class="form-actions">
+                <button class="btn" onclick="closeModal('smsModal')">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        'use strict';
+
+        // ===== 配置存储 =====
+        const STORAGE_KEY = 'simadmin_multi_devices';
+        const SMS_SEEN_KEY = 'simadmin_sms_seen';
+        // URL 带 ?reset=1 时清空已读记录（模拟"来新短信"，用于体验未读提醒）
+        if (new URLSearchParams(location.search).has('reset')) {
+            localStorage.removeItem(SMS_SEEN_KEY);
+            history.replaceState(null, '', location.pathname);
+        }
+        let devices = loadDevices();
+
+        function loadDevices() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                const list = raw ? JSON.parse(raw) : [];
+                return list.map(d => ({ ...d, data: null, error: null, loading: false, lastUpdate: null }));
+            } catch (e) {
+                return [];
+            }
+        }
+        function saveDevices() {
+            const slim = devices.map(d => ({ id: d.id, name: d.name, url: d.url, password: d.password }));
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(slim));
+        }
+
+        // IP → 完整 URL（默认补 http:// 和 :3000）
+        function normalizeUrl(input) {
+            let s = String(input || '').trim();
+            if (!s) return '';
+            if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
+            const u = new URL(s);
+            if (!u.port && u.protocol === 'http:') u.port = '3000';
+            return u.toString().replace(/\/+$/, '');
+        }
+
+        // ===== 工具 =====
+        function $(id) { return document.getElementById(id); }
+        function esc(s) {
+            if (s == null) return '';
+            const d = document.createElement('div');
+            d.textContent = String(s);
+            return d.innerHTML;
+        }
+        let toastTimer = null;
+        function showToast(msg) {
+            const t = $('toast');
+            t.textContent = msg;
+            t.classList.add('show');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
+        }
+        function fmtBytes(b) {
+            if (b == null) return '—';
+            if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+            if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+            if (b >= 1024) return (b / 1024).toFixed(1) + ' KB';
+            return b + ' B';
+        }
+        function fmtUptime(seconds) {
+            if (!seconds) return '—';
+            const d = Math.floor(seconds / 86400);
+            const h = Math.floor((seconds % 86400) / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            if (d > 0) return `${d}天 ${h}小时`;
+            if (h > 0) return `${h}小时 ${m}分`;
+            return `${m}分`;
+        }
+        function signalClass(v) {
+            if (v >= 70) return 'signal-strong';
+            if (v >= 40) return 'signal-mid';
+            return 'signal-weak';
+        }
+        function signalBars(pct) {
+            if (pct == null) return '<span style="color:var(--muted)">—</span>';
+            const bars = pct >= 70 ? 4 : pct >= 40 ? 3 : pct >= 20 ? 2 : 1;
+            let html = `<span class="signal-disp"><span class="signal-bars">`;
+            for (let i = 1; i <= 4; i++) html += `<span style="height:${4 + i * 3}px" class="${i <= bars ? 'on' : ''}"></span>`;
+            html += `</span><span class="${signalClass(pct)}">${pct}%</span></span>`;
+            return html;
+        }
+
+        // 注册状态英文 → 中文（与 SimAdmin 后端 registration_label 一致）
+        function regLabel(value) {
+            const v = String(value || '').trim().toLowerCase();
+            switch (v) {
+                case 'registered': case 'home': return '已注册';
+                case 'roaming': return '已注册（漫游）';
+                case 'searching': return '搜索中';
+                case 'denied': return '被拒绝';
+                case 'idle': return '空闲';
+                case '': return '—';
+                default: return String(value);
+            }
+        }
+
+        // VoLTE 状态徽章配色：
+        //   绿色 = 注册成功（registered）
+        //   黄色 = 启动中 / 停止中 / 等待连接 / 搜索重试等中间态
+        //   红色 = 未连接 / 连接失败 / 功能未开启
+        //   灰色 = 固件无此接口（旧版）
+        function volteBadge(dev, volte) {
+            // 接口返回错误/404/空 → 固件不支持
+            if (volte == null || typeof volte !== 'object' || volte.status === 'error' || !volte.runtime) {
+                return '<span style="color:var(--muted)">固件不支持</span>';
+            }
+            const runtime = volte.runtime || {};
+            const reg = (runtime.phase || runtime.stage || '').toLowerCase();
+            // 绿色：注册成功
+            if (runtime.registered || reg === 'registered') {
+                return `<span class="status-badge status-online">📶 VoLTE 成功 · ${esc(runtime.registration_mode || '')}</span>`;
+            }
+            // 红色：功能未开启
+            if (volte.feature_enabled === false) {
+                return '<span class="status-badge status-error">📶 VoLTE 功能未开启</span>';
+            }
+            // 黄色：中间态（启动/停止/等待连接/搜索/重试）
+            if (/starting|stopping|searching|retrying|initializing|enabling|disabling|waiting|connecting|pending|registering/.test(reg)) {
+                const label = reg === 'stopping' ? '停止中'
+                    : reg === 'waiting' || reg === 'connecting' || reg === 'registering' ? '等待连接'
+                    : reg === 'searching' || reg === 'retrying' ? '搜索重试中'
+                    : '启动中';
+                return `<span class="status-badge status-warning">📶 VoLTE ${label}</span>`;
+            }
+            // 红色：未连接 / 连接失败 / 其他未知状态
+            return '<span class="status-badge status-error">📶 VoLTE 未连接</span>';
+        }
+
+        // ===== SimAdmin API 调用（经本地 PHP 代理） =====
+        async function apiCall(action, params = {}) {
+            const url = 'api.php?action=' + action;
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(params)
+            });
+            const json = await res.json().catch(() => null);
+            if (!res.ok || !json || json.status !== 'ok') {
+                throw new Error((json && json.message) || '请求失败 (HTTP ' + res.status + ')');
+            }
+            return json.data;
+        }
+
+        async function apiLogin(dev) {
+            await apiCall('login', { url: dev.url, password: dev.password });
+        }
+
+        async function apiGet(dev, path) {
+            const url = 'api.php?action=status&url=' + encodeURIComponent(dev.url) + '&path=' + encodeURIComponent(path);
+            const res = await fetch(url);
+            const json = await res.json().catch(() => null);
+            return json && json.data !== undefined ? json.data : json;
+        }
+
+        // ===== 拉取单台设备全部状态 =====
+        async function fetchDevice(dev) {
+            dev.loading = true;
+            dev.error = null;
+            renderAll();
+            try {
+                await apiLogin(dev);
+                const [health, device, sim, network, stats] = await Promise.all([
+                    apiGet(dev, '/api/health'),
+                    apiGet(dev, '/api/device'),
+                    apiGet(dev, '/api/sim'),
+                    apiGet(dev, '/api/network'),
+                    apiGet(dev, '/api/stats')
+                ]);
+                // VoLTE 状态（新版 SimAdmin 接口；旧版返回错误则忽略）
+                let volte = null;
+                try {
+                    volte = await apiGet(dev, '/api/volte/control');
+                } catch (e) { /* 旧版固件无此接口 */ }
+                // 附加状态：数据连接/漫游/飞行模式/OTA
+                const [dataConn, roaming, airplane, ota] = await Promise.all([
+                    apiGet(dev, '/api/data').catch(() => null),
+                    apiGet(dev, '/api/roaming').catch(() => null),
+                    apiGet(dev, '/api/airplane-mode').catch(() => null),
+                    apiGet(dev, '/api/ota/status').catch(() => null)
+                ]);
+                dev.data = {
+                    health, device, sim, network, stats, volte,
+                    dataConn, roaming, airplane, ota,
+                    version: health && health.version ? health.version : null
+                };
+                dev.error = null;
+                dev.lastUpdate = new Date();
+                // 后台拉取短信用于未读角标（不阻塞主状态）
+                refreshSms(dev);
+            } catch (e) {
+                dev.data = null;
+                dev.error = e.message || String(e);
+                console.error(`[${dev.name}]`, e);
+            } finally {
+                dev.loading = false;
+                renderAll();
+            }
+        }
+
+        function refreshAll() {
+            const ind = $('refreshIndicator');
+            // 文字固定不转，转圈图标单独一个元素
+            ind.innerHTML = '刷新中 <span class="spin-icon">⟳</span>';
+            devices.forEach(d => fetchDevice(d));
+            setTimeout(() => {
+                ind.innerHTML = '';
+            }, 1500);
+        }
+
+        // ===== 统计卡片 =====
+        function renderStats() {
+            const total = devices.length;
+            const online = devices.filter(d => d.data && !d.error).length;
+            const error = devices.filter(d => d.error).length;
+            const offline = total - online - error;
+            const withSim = devices.filter(d => d.data && d.data.sim && d.data.sim.present).length;
+
+            $('statsGrid').innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-label">设备总数</div>
+                    <div class="stat-value">${total}</div>
+                    <div class="stat-sub">已配置 ${total} 台</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">在线（API 正常）</div>
+                    <div class="stat-value green">${online}</div>
+                    <div class="stat-sub">可管理 ${online} 台</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">离线 / 异常</div>
+                    <div class="stat-value ${error > 0 ? 'red' : 'yellow'}">${error}<span style="font-size:0.9rem;color:var(--muted)"> / ${offline}</span></div>
+                    <div class="stat-sub" style="color:${error > 0 ? 'var(--red)' : 'var(--muted)'}">${error > 0 ? '⚠ 有设备连接失败' : '全部可达'}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">已插 SIM 卡</div>
+                    <div class="stat-value accent">${withSim}</div>
+                    <div class="stat-sub">共 ${total} 台设备</div>
+                </div>
+            `;
+        }
+
+        // ===== 设备卡片 =====
+        function renderDeviceCard(dev) {
+            const d = dev.data;
+            const isError = !!dev.error;
+            const isOnline = !!d && !isError;
+
+            // 网络
+            const net = d && d.network;
+            const sim = d && d.sim;
+            // 附加状态
+            const dataConn = d && d.dataConn;
+            const roaming = d && d.roaming;
+            const airplane = d && d.airplane;
+            const ota = d && d.ota;
+            const stats = d && d.stats;
+            const deviceInfo = d && d.device;
+            const cpu = stats && stats.cpu_load ? stats.cpu_load.load_percent : null;
+            const mem = stats && stats.memory ? stats.memory.used_percent : null;
+            const temp = stats && stats.temperature && stats.temperature[0] ? stats.temperature[0].temperature : null;
+            const signal = net ? net.signal_strength : null;
+            const uptimeSec = stats && stats.uptime ? stats.uptime.uptime_seconds : null;
+
+            const statusCls = isError ? 'status-error' : isOnline ? 'status-online' : 'status-offline';
+            const statusTxt = isError ? '连接失败' : isOnline ? '在线' : '离线';
+
+            return `
+            <div class="device-card ${isError ? 'error-card' : ''}">
+                <div class="dev-head">
+                    <div class="dev-avatar ${isError ? 'error' : !isOnline ? 'offline' : ''}">${isError ? '⚠️' : '📡'}</div>
+                    <div>
+                        <div class="dev-name">${esc(dev.name)}</div>
+                        <div class="dev-url">${esc(dev.url)}</div>
+                    </div>
+                    <div class="dev-status">
+                        <span class="status-badge ${statusCls}">${statusTxt}</span>
+                        ${dev.lastUpdate ? `<span style="font-size:0.68rem;color:var(--muted)">${dev.lastUpdate.toLocaleTimeString()}</span>` : ''}
+                    </div>
+                </div>
+                <div class="dev-body">
+                    ${isError ? `
+                        <div class="kv-row"><span class="k">错误信息</span><span class="v" style="color:var(--red)">${esc(dev.error)}</span></div>
+                        <div class="kv-row"><span class="k">提示</span><span class="v">检查地址、端口、密码</span></div>
+                    ` : !d ? `
+                        <div class="kv-row"><span class="k">状态</span><span class="v">${dev.loading ? '加载中...' : '未获取'}</span></div>
+                    ` : `\n
+                        ${ota && ota.pending_update ? `<div class="ota-banner">📦 固件更新可用：${esc(ota.pending_meta && ota.pending_meta.version || '')} <button class="btn" style="padding:2px 10px;font-size:0.7rem" onclick="openDeviceWeb('${dev.id}')">去更新</button></div>` : ''}
+                        <div class="kv-row"><span class="k">固件版本</span><span class="v mono">${esc(d.version || (deviceInfo && deviceInfo.revision) || '—')}</span></div>
+                        <div class="kv-row"><span class="k">型号 / IMEI</span><span class="v mono">${esc(deviceInfo ? (deviceInfo.model || '—') + ' / ' + (deviceInfo.imei || '—') : '—')}</span></div>
+                        <div class="kv-row"><span class="k">SIM 卡</span><span class="v">${sim && sim.present ? esc((sim.phone_numbers && sim.phone_numbers[0]) || sim.iccid || '已插卡') : '未插卡 / 无 SIM'}</span></div>
+                        <div class="kv-row"><span class="k">运营商</span><span class="v">${esc(net ? net.operator_name || '—' : '—')}</span></div>
+                        <div class="kv-row">
+                            <span class="k">信号强度</span>
+                            <span class="v">${signalBars(signal)}</span>
+                        </div>
+                        <div class="kv-row"><span class="k">注册状态</span><span class="v">${esc(regLabel(net ? net.registration_status : null))}</span></div>
+                        <div class="kv-row">
+                            <span class="k">数据连接</span>
+                            <span class="v">${dataConn ? (dataConn.active ? '<span class="status-badge status-online">已开启</span>' : '<span class="status-badge status-offline">已关闭</span>') : '—'}</span>
+                        </div>
+                        <div class="kv-row">
+                            <span class="k">漫游 / 飞行</span>
+                            <span class="v">
+                                ${roaming && roaming.is_roaming ? '<span class="status-badge status-warning">漫游中</span>' : '<span class="status-badge status-offline">未漫游</span>'}
+                                ${airplane && airplane.enabled ? '<span class="status-badge status-error">飞行模式</span>' : ''}
+                            </span>
+                        </div>
+                        <div class="kv-row">
+                            <span class="k">VoLTE</span>
+                            <span class="v">${volteBadge(dev, d.volte)}</span>
+                        </div>
+                        <div class="kv-row"><span class="k">运行时长</span><span class="v">${fmtUptime(uptimeSec)}</span></div>
+                        <div class="kv-row"><span class="k">温度</span><span class="v">${temp != null ? temp.toFixed(1) + '°C' : '—'}</span></div>
+                        <div class="kv-row">
+                            <span class="k">CPU 负载</span>
+                            <span class="v" style="width:45%">
+                                ${cpu != null ? cpu.toFixed(0) + '%' : '—'}
+                                <div class="meter cpu"><div style="width:${cpu || 0}%"></div></div>
+                            </span>
+                        </div>
+                        <div class="kv-row">
+                            <span class="k">内存</span>
+                            <span class="v" style="width:45%">
+                                ${mem != null ? mem.toFixed(0) + '%' : '—'}
+                                <div class="meter mem"><div style="width:${mem || 0}%"></div></div>
+                            </span>
+                        </div>
+                    `}
+                </div>
+                <div class="dev-actions">
+                    <button class="btn" onclick="fetchDevice(findDev('${dev.id}'))">🔄 刷新</button>
+                    <button class="btn ${countUnreadSms(dev) > 0 ? 'btn-sms-unread' : ''}" onclick="openSms('${dev.id}')">${smsBtnHtml(dev)}</button>
+                    <button class="btn" onclick="openDeviceWeb('${dev.id}')">🌐 Web UI</button>
+                    <button class="btn btn-danger" onclick="confirmRemoveDevice('${dev.id}')">🗑️</button>
+                </div>
+            </div>`;
+        }
+
+        function renderGrid() {
+            const grid = $('deviceGrid');
+            $('listHint').textContent = devices.length ? `${devices.length} 台设备 · 点击「刷新全部」或单卡刷新拉取状态` : '';
+            if (devices.length === 0) {
+                grid.innerHTML = `
+                    <div class="empty-state" style="grid-column:1/-1">
+                        <div class="big">📭</div>
+                        <div>还没有配置设备</div>
+                        <div style="margin-top:12px"><button class="btn btn-primary" onclick="openAddDevice()">＋ 添加第一台设备</button></div>
+                    </div>`;
+                return;
+            }
+            grid.innerHTML = devices.map(renderDeviceCard).join('');
+        }
+
+        function renderAll() {
+            renderStats();
+            renderGrid();
+        }
+
+        function findDev(id) { return devices.find(d => d.id === id); }
+
+        // ===== 短信 =====
+        let smsDevId = null;      // 当前短信弹窗对应的设备
+
+        // --- 已读记录 ---
+        function loadSeenSms() {
+            try { return JSON.parse(localStorage.getItem(SMS_SEEN_KEY)) || {}; } catch (e) { return {}; }
+        }
+        function seenSmsMaxId(devId) {
+            return loadSeenSms()[devId] || 0;
+        }
+        function markSmsSeen(devId, maxId) {
+            const seen = loadSeenSms();
+            seen[devId] = Math.max(seen[devId] || 0, maxId || 0);
+            localStorage.setItem(SMS_SEEN_KEY, JSON.stringify(seen));
+        }
+        // 未读统计（仅 incoming 且 id > 已读记录）
+        function countUnreadSms(dev) {
+            const msgs = (dev.data && dev.data.smsMsgs) || [];
+            const seen = seenSmsMaxId(dev.id);
+            return msgs.filter(m => m.direction === 'incoming' && m.id > seen).length;
+        }
+        // 短信按钮未读数字（0 时不显示）
+        function smsBtnHtml(dev) {
+            const n = countUnreadSms(dev);
+            if (n <= 0) return '💬 短信';
+            return `💬 短信 <b class="sms-badge-num">${n}</b>`;
+        }
+
+        // --- 拉取短信（唯一入口：更新数据 + 角标；弹窗打开时同步刷新面板） ---
+        async function refreshSms(dev, { markRead = false, panel = false } = {}) {
+            try {
+                const data = await apiGet(dev, '/api/sms/list?limit=50&offset=0');
+                const msgs = (data && data.messages) || [];
+                dev.data = dev.data || {};
+                dev.data.smsMsgs = msgs;
+                if (markRead) {
+                    const maxIncoming = msgs
+                        .filter(m => m.direction === 'incoming')
+                        .reduce((mx, m) => Math.max(mx, m.id || 0), 0);
+                    markSmsSeen(dev.id, maxIncoming);
+                }
+                if (panel && smsDevId === dev.id && $('smsModal').classList.contains('active')) {
+                    renderSmsPanel(dev);
+                }
+                renderAll();
+                return msgs;
+            } catch (e) {
+                return [];
+            }
+        }
+
+        // --- 弹窗面板渲染（聊天视图：旧→新，最新在底部） ---
+        function renderSmsPanel(dev) {
+            const body = $('smsBody');
+            const msgs = (dev.data && dev.data.smsMsgs) || [];
+            if (!msgs.length) {
+                body.innerHTML = `<div class="sms-empty">📭 暂无短信</div>` + replyBoxHtml(dev);
+                return;
+            }
+            const sorted = [...msgs].reverse(); // DESC → ASC，新的在底部
+            const items = sorted.map(m => {
+                const incoming = m.direction === 'incoming';
+                const cls = incoming ? 'incoming' : 'outgoing';
+                const unread = incoming && m.id > seenSmsMaxId(dev.id);
+                return `
+                    <div class="sms-msg ${cls} ${unread ? 'unread' : ''}">
+                        <div class="bubble">
+                            <div class="meta">
+                                <span class="num">${esc(m.phone_number || '—')}</span>
+                                <span>${fmtSmsTime(m.timestamp)}</span>
+                            </div>
+                            <div>${esc(m.content || '')}</div>
+                        </div>
+                    </div>`;
+            }).join('');
+            body.innerHTML = `<div class="sms-list">${items}</div>` + replyBoxHtml(dev);
+            // 最新消息（最后一条 outgoing 或 incoming）滚到底部
+            const list = body.querySelector('.sms-list');
+            if (list) list.scrollTop = list.scrollHeight;
+        }
+
+        // 时间格式化：今天→HH:MM，昨天→昨天 HH:MM，更早→MM-DD HH:MM
+        function fmtSmsTime(ts) {
+            if (!ts) return '';
+            const d = new Date(String(ts).replace(' ', 'T'));
+            if (isNaN(d.getTime())) return esc(ts);
+            const now = new Date();
+            const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+            const sameDay = d.toDateString() === now.toDateString();
+            const yest = new Date(now); yest.setDate(now.getDate() - 1);
+            if (sameDay) return hm;
+            if (d.toDateString() === yest.toDateString()) return `昨天 ${hm}`;
+            return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hm}`;
+        }
+
+        function replyBoxHtml(dev) {
+            return `
+                <div class="sms-reply-box">
+                    <input type="text" id="smsReplyNum" placeholder="收件号码" value="">
+                    <textarea id="smsReplyContent" placeholder="输入回复内容..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSms('${dev.id}')}"></textarea>
+                    <button class="btn btn-primary" onclick="sendSms('${dev.id}')">发送</button>
+                </div>`;
+        }
+
+        // --- 发送短信 ---
+        async function sendSms(devId) {
+            const dev = findDev(devId);
+            if (!dev) return;
+            const num = $('smsReplyNum').value.trim();
+            const content = $('smsReplyContent').value.trim();
+            if (!num || !content) { showToast('⚠ 号码和内容必填'); return; }
+            try {
+                const res = await fetch('api.php?action=action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: dev.url, path: '/api/sms/send', body: { phone_number: num, content } })
+                });
+                const json = await res.json().catch(() => null);
+                if (!json || json.status !== 'ok') {
+                    throw new Error((json && json.message) || '发送失败');
+                }
+                showToast(`✅ 已发送给 ${num}`);
+                $('smsReplyContent').value = '';
+                // 乐观插入一条 outgoing（立即显示，避免等轮询）
+                const now = new Date();
+                const pad = n => String(n).padStart(2, '0');
+                const ts = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+                const msgs = (dev.data && dev.data.smsMsgs) || [];
+                dev.data.smsMsgs = [{ id: Date.now(), direction: 'outgoing', phone_number: num, content, timestamp: ts, status: 'sent' }, ...msgs];
+                renderSmsPanel(dev);
+                renderAll();
+                // 后台重新拉取对齐真实数据
+                refreshSms(dev, { panel: true });
+            } catch (e) {
+                showToast('❌ ' + (e.message || e));
+            }
+        }
+
+        // --- 打开/关闭弹窗 ---
+        function openSms(devId) {
+            const dev = findDev(devId);
+            if (!dev) return;
+            smsDevId = devId;
+            $('smsTitle').textContent = `💬 短信 · ${dev.name}`;
+            $('smsBody').innerHTML = '<div class="sms-empty">加载中...</div>';
+            openModal('smsModal');
+            // 打开即拉取并标记已读
+            refreshSms(dev, { markRead: true, panel: true });
+        }
+
+        // 关闭弹窗（含 Esc 与点遮罩）时清空当前设备
+        function closeSmsModal() {
+            $('smsModal').classList.remove('active');
+            smsDevId = null;
+        }
+
+        // ===== 设备操作 =====
+        function openDeviceWeb(id) {
+            const dev = findDev(id);
+            if (!dev) return;
+            // SimAdmin Web UI 与 API 同端口
+            window.open(dev.url, '_blank', 'noopener');
+        }
+
+        async function confirmRemoveDevice(id) {
+            const dev = findDev(id);
+            if (!dev) return;
+            if (!confirm(`确定移除设备「${dev.name}」吗？`)) return;
+            devices = devices.filter(d => d.id !== id);
+            saveDevices();
+            renderAll();
+            showToast(`已移除「${dev.name}」`);
+        }
+
+        // ===== 添加设备 =====
+        function openAddDevice() {
+            $('addName').value = '';
+            $('addIp').value = '';
+            $('addPassword').value = '';
+            openModal('addModal');
+        }
+        function confirmAddDevice() {
+            const name = $('addName').value.trim();
+            const ip = $('addIp').value.trim();
+            const password = $('addPassword').value;
+            if (!name || !ip || !password) {
+                showToast('⚠ 名称、IP、密码均必填');
+                return;
+            }
+            let url;
+            try {
+                url = normalizeUrl(ip);
+            } catch (e) {
+                showToast('⚠ IP 地址格式不正确');
+                return;
+            }
+            devices.push({
+                id: 'dev_' + Date.now().toString(36),
+                name, url, password,
+                data: null, error: null, loading: false, lastUpdate: null
+            });
+            saveDevices();
+            closeModal('addModal');
+            renderAll();
+            fetchDevice(devices[devices.length - 1]);
+            showToast(`✅ 已添加「${name}」（${url}），正在连接...`);
+        }
+
+        // ===== 管理设备列表 =====
+        function openManageDevices() {
+            $('manageList').innerHTML = devices.length ? devices.map(d => `
+                <div class="device-list-item">
+                    <span class="name">${esc(d.name)}</span>
+                    <span class="addr">${esc(d.url)}</span>
+                    <span class="actions">
+                        <button class="btn" style="padding:4px 10px" onclick="fetchDevice(findDev('${d.id}'));closeModal('manageModal')">🔄</button>
+                        <button class="btn btn-danger" style="padding:4px 10px" onclick="confirmRemoveDevice('${d.id}')">🗑️</button>
+                    </span>
+                </div>
+            `).join('') : '<div style="color:var(--muted);text-align:center;padding:20px">暂无设备</div>';
+            openModal('manageModal');
+        }
+
+        // ===== 弹窗 =====
+        function openModal(id) { $(id).classList.add('active'); }
+        function closeModal(id) {
+            $(id).classList.remove('active');
+            if (id === 'smsModal') smsDevId = null; // 关闭短信弹窗时清空当前设备
+        }
+        document.querySelectorAll('.modal-overlay').forEach(ov => {
+            ov.addEventListener('click', e => {
+                if (e.target === ov) closeModal(ov.id);
+            });
+        });
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') {
+                document.querySelectorAll('.modal-overlay.active').forEach(m => closeModal(m.id));
+            }
+        });
+
+        // ===== 初始化 =====
+        renderAll();
+        if (devices.length > 0) refreshAll();
+        // 全局轮询：每 10 秒检查所有设备新短信（未读角标；短信弹窗开着时同步刷新面板）
+        setInterval(() => {
+            devices.forEach(d => {
+                if (d.data && !d.error) refreshSms(d, { panel: true });
+            });
+        }, 10000);
+    </script>
+</body>
+</html>
