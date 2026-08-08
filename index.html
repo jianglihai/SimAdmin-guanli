@@ -331,16 +331,30 @@
             }).catch(() => {});
         }
 
-        // 启动时从服务器拉取设备配置（同步）；服务器无配置则用本地 localStorage
+        // 启动时与服务器同步设备配置（双向）：
+        //   服务器有配置 → 用服务器（权威源），覆盖本地缓存
+        //   服务器无配置但本地有 → 本地上传到服务器（回填，让其他端可见）
         async function syncDevicesFromServer() {
             try {
                 const res = await fetch('api.php?action=devices');
                 const json = await res.json().catch(() => null);
-                if (json && json.status === 'ok' && Array.isArray(json.data) && json.data.length > 0) {
-                    devices = json.data.map(d => ({ ...d, data: null, error: null, loading: false, lastUpdate: null }));
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(devices.map(d => ({ id: d.id, name: d.name, url: d.url, password: d.password }))));
+                const serverList = (json && json.status === 'ok' && Array.isArray(json.data)) ? json.data : null;
+                if (serverList && serverList.length > 0) {
+                    // 服务器有数据：以服务器为准
+                    devices = serverList.map(d => ({ ...d, data: null, error: null, loading: false, lastUpdate: null }));
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(serverList.map(d => ({ id: d.id, name: d.name, url: d.url, password: d.password }))));
                     return true;
                 }
+                // 服务器无数据：若有本地配置则回填到服务器（双向同步）
+                if (devices.length > 0) {
+                    const slim = devices.map(d => ({ id: d.id, name: d.name, url: d.url, password: d.password }));
+                    await fetch('api.php?action=devices', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ devices: slim })
+                    }).catch(() => {});
+                }
+                return false;
             } catch (e) { /* 服务器不可用时用本地配置 */ }
             return false;
         }
