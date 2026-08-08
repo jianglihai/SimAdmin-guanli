@@ -27,8 +27,45 @@ header('Cache-Control: no-store, no-cache, must-revalidate');
 define('SESSION_DIR', __DIR__ . '/data/sessions');
 define('DEVICES_FILE', __DIR__ . '/data/devices.json');
 define('SMS_SEEN_FILE', __DIR__ . '/data/sms_seen.json');
+define('CONFIG_FILE', __DIR__ . '/data/config.json');
 define('SESSION_TTL', 1800); // 会话缓存 30 分钟
 define('REQUEST_TIMEOUT', 15);
+define('STATUS_TTL', 30);    // 设备状态缓存 30 秒（自动刷新节流）
+
+// ---------- 主密码保护 ----------
+// 首次访问时若未设置主密码，允许 setup 接口设置；设置后所有接口需带主密码
+function get_access_password() {
+    if (!file_exists(CONFIG_FILE)) return '';
+    $cfg = json_decode(file_get_contents(CONFIG_FILE), true);
+    return isset($cfg['access_password']) ? $cfg['access_password'] : '';
+}
+
+function access_password_set() {
+    return get_access_password() !== '';
+}
+
+function check_access($provided) {
+    $stored = get_access_password();
+    if ($stored === '') return true; // 未设置主密码，暂不校验（首次部署）
+    return is_string($provided) && hash_equals($stored, $provided);
+}
+
+// 从请求中提取主密码：POST body 的 access_password 或 GET 的 access_password
+function extract_access_password() {
+    if (isset($_POST['access_password'])) return $_POST['access_password'];
+    if (isset($_GET['access_password'])) return $_GET['access_password'];
+    $raw = file_get_contents('php://input');
+    $json = json_decode($raw, true);
+    return is_array($json) && isset($json['access_password']) ? $json['access_password'] : null;
+}
+
+// 从设备列表响应中剔除密码字段（防止泄露）
+function strip_passwords($devices) {
+    return array_map(function ($d) {
+        unset($d['password']);
+        return $d;
+    }, $devices);
+}
 
 // ---------- 工具 ----------
 function json_out($status, $message, $data = null) {
@@ -238,12 +275,37 @@ function login_device($url, $password) {
 }
 
 /**
- * 转发设备 API 请求
+ * 从设备配置中查找该设备的密码（用于会话自动重登）
+ */
+function find_device_password($url) {
+    if (!file_exists(DEVICES_FILE)) return null;
+    $list = json_decode(file_get_contents(DEVICES_FILE), true);
+    if (!is_array($list)) return null;
+    foreach ($list as $d) {
+        if (isset($d['url'], $d['password']) && rtrim($d['url'], '/') === $url) {
+            return $d['password'];
+        }
+    }
+    return null;
+}
+
+/**
+ * 转发设备 API 请求；会话缺失/失效时自动重登一次（免手动刷新）
  */
 function forward_device($url, $path, $method, $body = null) {
     $cookie = get_session_cookie($url);
     if (!$cookie) {
-        throw new Exception('会话未建立，请先登录该设备');
+        // 会话缺失：尝试用配置中的密码自动重登
+        $password = find_device_password($url);
+        if ($password !== null) {
+            try {
+                login_device($url, $password);
+                $cookie = get_session_cookie($url);
+            } catch (Exception $e) { $cookie = null; }
+        }
+        if (!$cookie) {
+            throw new Exception('会话未建立，请先登录该设备');
+        }
     }
     $headers = ['Cookie: ' . $cookie];
     $payload = null;
@@ -257,6 +319,25 @@ function forward_device($url, $path, $method, $body = null) {
         $headers,
         $payload
     );
+    // 会话过期（401/403）时自动重登一次
+    if (($status === 401 || $status === 403) && $method === 'GET') {
+        $password = find_device_password($url);
+        if ($password !== null) {
+            try {
+                clear_session($url);
+                login_device($url, $password);
+                $newCookie = get_session_cookie($url);
+                if ($newCookie) {
+                    list($status, $_unused, $respBody) = device_request(
+                        $url . $path,
+                        $method,
+                        ['Cookie: ' . $newCookie] + $headers,
+                        $payload
+                    );
+                }
+            } catch (Exception $e) { /* 重登失败则返回原始 401 */ }
+        }
+    }
     return [$status, $respBody];
 }
 
@@ -264,6 +345,30 @@ function forward_device($url, $path, $method, $body = null) {
 $action = isset($_GET['action']) ? $_GET['action'] : '';
 
 try {
+    // setup：首次设置主密码（仅在未设置时可用）
+    if ($action === 'setup') {
+        $body = read_body();
+        $password = isset($body['access_password']) ? (string) $body['access_password'] : '';
+        if (access_password_set()) {
+            json_out('error', '主密码已设置，如需修改请直接编辑 data/config.json');
+        }
+        if (strlen($password) < 4) {
+            json_out('error', '主密码至少 4 位');
+        }
+        if (!is_dir(dirname(CONFIG_FILE))) {
+            @mkdir(dirname(CONFIG_FILE), 0755, true);
+        }
+        file_put_contents(CONFIG_FILE, json_encode(['access_password' => $password], JSON_UNESCAPED_UNICODE), LOCK_EX);
+        @chmod(CONFIG_FILE, 0600);
+        json_out('ok', '主密码已设置');
+    }
+
+    // 鉴权：除 setup / health 外，所有接口需通过主密码校验
+    $isOpen = in_array($action, ['setup', 'health']);
+    if (!$isOpen && !check_access(extract_access_password())) {
+        json_out('error', '需要主密码（access_password）', ['need_auth' => true]);
+    }
+
     switch ($action) {
 
         case 'login':
@@ -309,18 +414,27 @@ try {
 
         case 'health':
             $sessions = is_dir(SESSION_DIR) ? count(glob(SESSION_DIR . '/*.json') ?: []) : 0;
-            json_out('ok', 'SimAdmin proxy running', ['sessions' => $sessions]);
+            json_out('ok', 'SimAdmin proxy running', [
+                'sessions' => $sessions,
+                'access_protected' => access_password_set(),
+            ]);
             break;
 
         case 'devices':
             // GET：读取服务器端设备配置（跨设备同步）
+            //      已设置主密码（调用者已鉴权）→ 返回完整配置（含密码，多端登录需要）
+            //      未设置主密码（开放状态）→ 隐藏密码兜底
             // POST：保存设备配置到服务器（覆盖式）
             if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 if (!file_exists(DEVICES_FILE)) {
                     json_out('ok', '无设备配置', []);
                 }
                 $data = json_decode(file_get_contents(DEVICES_FILE), true);
-                json_out('ok', '设备配置', is_array($data) ? $data : []);
+                $data = is_array($data) ? $data : [];
+                if (!access_password_set()) {
+                    $data = strip_passwords($data);
+                }
+                json_out('ok', '设备配置', $data);
                 break;
             }
             $body = read_body();
@@ -376,16 +490,32 @@ try {
             if (!is_dir(dirname(SMS_SEEN_FILE))) {
                 @mkdir(dirname(SMS_SEEN_FILE), 0755, true);
             }
-            // 合并写入（取较大值，避免旧端覆盖新端）
+            // 合并写入（取较大值，避免旧端覆盖新端）；flock 保证读-改-写原子性
             $existing = [];
-            if (file_exists(SMS_SEEN_FILE)) {
-                $existing = json_decode(file_get_contents(SMS_SEEN_FILE), true);
-                if (!is_array($existing)) $existing = [];
+            $fp = fopen(SMS_SEEN_FILE, 'c+');
+            if ($fp !== false) {
+                flock($fp, LOCK_EX);
+                $raw = stream_get_contents($fp);
+                if ($raw !== false && $raw !== '') {
+                    $tmp = json_decode($raw, true);
+                    if (is_array($tmp)) $existing = $tmp;
+                }
+                foreach ($clean as $devId => $maxId) {
+                    $existing[$devId] = max(isset($existing[$devId]) ? (int) $existing[$devId] : 0, $maxId);
+                }
+                ftruncate($fp, 0);
+                rewind($fp);
+                fwrite($fp, json_encode($existing, JSON_UNESCAPED_UNICODE));
+                fflush($fp);
+                flock($fp, LOCK_UN);
+                fclose($fp);
+            } else {
+                // 降级：直接写
+                foreach ($clean as $devId => $maxId) {
+                    $existing[$devId] = max(isset($existing[$devId]) ? (int) $existing[$devId] : 0, $maxId);
+                }
+                file_put_contents(SMS_SEEN_FILE, json_encode($existing, JSON_UNESCAPED_UNICODE), LOCK_EX);
             }
-            foreach ($clean as $devId => $maxId) {
-                $existing[$devId] = max(isset($existing[$devId]) ? (int) $existing[$devId] : 0, $maxId);
-            }
-            file_put_contents(SMS_SEEN_FILE, json_encode($existing, JSON_UNESCAPED_UNICODE), LOCK_EX);
             @chmod(SMS_SEEN_FILE, 0600);
             json_out('ok', '已保存已读记录', ['count' => count($existing)]);
             break;

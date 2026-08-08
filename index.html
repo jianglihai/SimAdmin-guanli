@@ -285,6 +285,21 @@
         </div>
     </div>
 
+    <!-- 主密码弹窗（首次设置 / 未授权时输入） -->
+    <div class="modal-overlay" id="authModal">
+        <div class="modal">
+            <h2 id="authTitle">🔒 访问密码</h2>
+            <div id="authTip" class="tip" style="margin-bottom:12px"></div>
+            <div class="form-group">
+                <label id="authLabel">输入访问密码</label>
+                <input type="password" id="authInput" placeholder="访问密码" autocomplete="off">
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" onclick="submitAuth()">确认</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 短信弹窗 -->
     <div class="modal-overlay" id="smsModal">
         <div class="modal" style="width:min(640px,94vw)">
@@ -317,15 +332,18 @@
             fetch('api.php?action=devices', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ devices: slim })
+                body: JSON.stringify({ devices: slim, ...(accessPassword ? { access_password: accessPassword } : {}) })
             }).catch(() => {});
         }
 
         // 启动时从服务器拉取设备配置（服务器是唯一数据源）
         async function syncDevicesFromServer() {
             try {
-                const res = await fetch('api.php?action=devices');
+                const res = await fetch('api.php?action=devices' + (accessPassword ? '&access_password=' + encodeURIComponent(accessPassword) : ''));
                 const json = await res.json().catch(() => null);
+                if (json && json.status === 'error' && json.data && json.data.need_auth) {
+                    throw new Error('NEED_AUTH');
+                }
                 const serverList = (json && json.status === 'ok' && Array.isArray(json.data)) ? json.data : [];
                 devices = serverList.map(d => ({ ...d, data: null, error: null, loading: false, lastUpdate: null }));
                 return serverList.length > 0;
@@ -436,29 +454,42 @@
         }
 
         // ===== SimAdmin API 调用（经本地 PHP 代理） =====
+        // 主密码：sessionStorage 保存（关标签页后需重新输入），所有请求自动附带
+        let accessPassword = sessionStorage.getItem('simadmin_access_pw') || '';
+        function setAccessPassword(pw) {
+            accessPassword = pw;
+            if (pw) sessionStorage.setItem('simadmin_access_pw', pw);
+            else sessionStorage.removeItem('simadmin_access_pw');
+        }
         async function apiCall(action, params = {}) {
             const url = 'api.php?action=' + action;
+            const body = { ...params };
+            if (accessPassword) body.access_password = accessPassword;
             const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(params)
+                body: JSON.stringify(body)
             });
             const json = await res.json().catch(() => null);
+            if (json && json.status === 'error' && json.data && json.data.need_auth) {
+                throw new Error('NEED_AUTH');
+            }
             if (!res.ok || !json || json.status !== 'ok') {
                 throw new Error((json && json.message) || '请求失败 (HTTP ' + res.status + ')');
             }
             return json.data;
         }
-
-        async function apiLogin(dev) {
-            await apiCall('login', { url: dev.url, password: dev.password });
-        }
-
         async function apiGet(dev, path) {
-            const url = 'api.php?action=status&url=' + encodeURIComponent(dev.url) + '&path=' + encodeURIComponent(path);
+            const url = 'api.php?action=status&url=' + encodeURIComponent(dev.url) + '&path=' + encodeURIComponent(path) + (accessPassword ? '&access_password=' + encodeURIComponent(accessPassword) : '');
             const res = await fetch(url);
             const json = await res.json().catch(() => null);
+            if (json && json.status === 'error' && json.data && json.data.need_auth) {
+                throw new Error('NEED_AUTH');
+            }
             return json && json.data !== undefined ? json.data : json;
+        }
+        async function apiLogin(dev) {
+            await apiCall('login', { url: dev.url, password: dev.password });
         }
 
         // ===== 拉取单台设备全部状态 =====
@@ -499,6 +530,13 @@
             } catch (e) {
                 dev.data = null;
                 dev.error = e.message || String(e);
+                if (e.message === 'NEED_AUTH') {
+                    // 主密码失效/未输入 → 弹出登录框
+                    setAccessPassword('');
+                    authNeedsSetup = false;
+                    openAuthModal();
+                    return;
+                }
                 console.error(`[${dev.name}]`, e);
             } finally {
                 dev.loading = false;
@@ -685,13 +723,13 @@
             fetch('api.php?action=sms-seen', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ seen: { [devId]: seen[devId] } })
+                body: JSON.stringify({ seen: { [devId]: seen[devId] }, ...(accessPassword ? { access_password: accessPassword } : {}) })
             }).catch(() => {});
         }
         // 启动时从服务器拉取已读记录并合并（取较大值，不覆盖本地新记录）
         async function syncSeenSmsFromServer() {
             try {
-                const res = await fetch('api.php?action=sms-seen');
+                const res = await fetch('api.php?action=sms-seen' + (accessPassword ? '&access_password=' + encodeURIComponent(accessPassword) : ''));
                 const json = await res.json().catch(() => null);
                 if (json && json.status === 'ok' && json.data && typeof json.data === 'object') {
                     const seen = loadSeenSms();
@@ -928,25 +966,103 @@
             }
         });
 
+        // ===== 主密码（首次设置 / 登录） =====
+        let authNeedsSetup = false; // 服务器尚未设置主密码
+        async function checkAuthState() {
+            try {
+                const res = await fetch('api.php?action=health');
+                const json = await res.json().catch(() => null);
+                if (json && json.status === 'ok') {
+                    authNeedsSetup = !json.data.access_protected;
+                    if (authNeedsSetup) {
+                        openAuthModal();
+                    } else if (!accessPassword) {
+                        openAuthModal();
+                    }
+                }
+            } catch (e) { /* 服务器不可用 */ }
+        }
+        function openAuthModal() {
+            $('authTitle').textContent = authNeedsSetup ? '🔒 首次设置访问密码' : '🔒 输入访问密码';
+            $('authLabel').textContent = authNeedsSetup ? '设置访问密码（至少 4 位）' : '输入访问密码';
+            $('authTip').textContent = authNeedsSetup
+                ? '首次部署，请设置一个访问密码保护管理页面（设备密码会保存在服务器，需访问密码保护）'
+                : '页面已被访问密码保护';
+            $('authInput').value = '';
+            openModal('authModal');
+            setTimeout(() => $('authInput').focus(), 50);
+        }
+        async function submitAuth() {
+            const pw = $('authInput').value.trim();
+            if (!pw) { showToast('⚠ 请输入密码'); return; }
+            try {
+                if (authNeedsSetup) {
+                    const res = await fetch('api.php?action=setup', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ access_password: pw })
+                    });
+                    const json = await res.json().catch(() => null);
+                    if (!json || json.status !== 'ok') {
+                        showToast('⚠ ' + ((json && json.message) || '设置失败'));
+                        return;
+                    }
+                    authNeedsSetup = false;
+                }
+                setAccessPassword(pw);
+                closeModal('authModal');
+                showToast('✅ 已进入管理页面');
+                initAfterAuth();
+            } catch (e) {
+                showToast('⚠ 密码错误或网络错误');
+            }
+        }
+
         // ===== 初始化 =====
         renderAll();
-        // 先同步服务器已读记录（跨设备共享），再同步设备配置
-        syncSeenSmsFromServer().then(() => {
-            return syncDevicesFromServer();
-        }).then(usedServer => {
-            if (usedServer) {
-                renderAll();
-                refreshAll();
-            } else if (devices.length > 0) {
-                refreshAll();
+        async function initAfterAuth() {
+            // 先同步服务器已读记录（跨设备共享），再同步设备配置
+            syncSeenSmsFromServer().then(() => {
+                return syncDevicesFromServer();
+            }).then(usedServer => {
+                if (usedServer) {
+                    renderAll();
+                    refreshAll();
+                } else if (devices.length > 0) {
+                    refreshAll();
+                }
+            });
+        }
+        // 检查鉴权状态：未设主密码→弹设置；已设但本端没密码→弹输入；已通过→直接初始化
+        (async () => {
+            try {
+                const res = await fetch('api.php?action=health');
+                const json = await res.json().catch(() => null);
+                if (json && json.status === 'ok') {
+                    authNeedsSetup = !json.data.access_protected;
+                    if (authNeedsSetup || !accessPassword) {
+                        openAuthModal();
+                    } else {
+                        initAfterAuth();
+                    }
+                } else {
+                    initAfterAuth();
+                }
+            } catch (e) {
+                initAfterAuth();
             }
-        });
+        })();
         // 全局轮询：每 10 秒检查所有设备新短信（未读角标；短信弹窗开着时同步刷新面板）
         setInterval(() => {
             devices.forEach(d => {
                 if (d.data && !d.error) refreshSms(d, { panel: true });
             });
         }, 10000);
+        // 设备状态自动刷新：每 30 秒刷新所有设备状态（离线设备及时发现）
+        setInterval(() => {
+            if (document.visibilityState === 'hidden') return; // 页面隐藏时不刷
+            devices.forEach(d => fetchDevice(d).catch(() => {}));
+        }, 30000);
     </script>
 </body>
 </html>
