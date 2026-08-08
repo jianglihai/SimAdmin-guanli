@@ -28,11 +28,18 @@
             --green: #1a7f37; --red: #cf222e; --yellow: #9a6700;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        /* 全局平滑过渡：主题切换时颜色/背景/边框自然渐变（0.4s），不闪眼 */
+        *, *::before, *::after {
+            transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease;
+        }
         body {
             font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-            background: linear-gradient(135deg, var(--bg) 0%, var(--bg-2) 100%);
+            background: var(--bg);
             color: var(--text); min-height: 100vh; padding: 20px;
-            transition: background 0.3s ease, color 0.3s ease;
+        }
+        /* 尊重系统"减少动画"偏好：直接切换 */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { transition: none !important; }
         }
         .container { max-width: 1500px; margin: 0 auto; }
 
