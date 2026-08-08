@@ -1004,6 +1004,16 @@
                     });
                     const json = await res.json().catch(() => null);
                     if (!json || json.status !== 'ok') {
+                        // setup 被拒绝（如另一台设备已设置过主密码）→ 自动切换为登录模式
+                        if (json && json.message && json.message.includes('已设置')) {
+                            authNeedsSetup = false;
+                            $('authTitle').textContent = '🔒 输入访问密码';
+                            $('authLabel').textContent = '输入访问密码';
+                            $('authTip').textContent = '主密码已在其他设备上设置，请输入已有密码';
+                            $('authInput').value = '';
+                            showToast('⚠ 主密码已被设置，请输入已有密码');
+                            return;
+                        }
                         showToast('⚠ ' + ((json && json.message) || '设置失败'));
                         return;
                     }
