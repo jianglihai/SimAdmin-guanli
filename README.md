@@ -17,6 +17,10 @@
   - **回复短信**：直接发送，Enter 快捷发送
   - 时间智能显示（今天→`17:31`，昨天→`昨天 09:00`）
 - **会话缓存**：代理自动登录设备（HttpOnly Cookie 缓存 30 分钟），前端无需处理认证
+- **主密码保护**：首次部署设置访问密码，所有接口鉴权；未设置时设备列表自动隐藏密码字段
+- **自动刷新**：设备状态每 30 秒自动刷新（页面隐藏时暂停），离线设备及时发现；短信每 10 秒检测未读
+- **会话自动重登**：设备会话缺失/过期时自动用配置密码重登，免手动刷新
+- **安全存储**：主密码以 bcrypt 哈希存储（`data/config.json`），设备密码与会话 Cookie 文件权限 0600，`data/` 目录 gitignore 排除
 
 ## 为什么需要代理
 
@@ -74,6 +78,9 @@ chmod -R 755 data
 
 ## 使用
 
+### 首次部署：设置主密码
+打开页面后弹出「首次设置访问密码」——设置后所有接口需要此密码鉴权（sessionStorage 保存，关闭标签页后需重新输入）。
+
 ### 添加设备
 1. 点击「＋ 添加设备」
 2. 输入：
@@ -97,11 +104,16 @@ chmod -R 755 data
 
 | 接口 | 方法 | 参数 | 说明 |
 |---|---|---|---|
+| `api.php?action=setup` | POST | `{access_password}` | 首次设置主密码（仅未设置时可用） |
 | `api.php?action=login` | POST | `{url, password}` | 登录设备，缓存会话 |
 | `api.php?action=logout` | POST | `{url}` | 清除会话缓存 |
 | `api.php?action=status` | GET | `url, path` | 转发设备 GET 请求（如 `/api/health`） |
 | `api.php?action=action` | POST | `{url, path, body}` | 转发设备 POST 请求（如 `/api/sms/send`） |
+| `api.php?action=devices` | GET/POST | — | 读取 / 保存设备配置（服务器端同步） |
+| `api.php?action=sms-seen` | GET/POST | — | 读取 / 合并保存短信已读记录 |
 | `api.php?action=health` | GET | — | 代理自身健康检查 |
+
+> 除 `setup` / `health` 外，所有接口需携带 `access_password` 主密码参数（GET 用查询参数，POST 用 body 字段）。
 
 > `path` 参数仅允许 `/api/` 开头的路径；`url` 仅允许 `http://` / `https://` 开头（防 SSRF）。
 
