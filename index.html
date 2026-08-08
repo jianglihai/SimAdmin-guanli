@@ -956,11 +956,14 @@
         }
         document.querySelectorAll('.modal-overlay').forEach(ov => {
             ov.addEventListener('click', e => {
-                if (e.target === ov) closeModal(ov.id);
+                // 主密码弹窗不可点击遮罩关闭（必须输入正确密码）
+                if (e.target === ov && ov.id !== 'authModal') closeModal(ov.id);
             });
         });
         document.addEventListener('keydown', e => {
             if (e.key === 'Escape') {
+                // 主密码弹窗打开时不可 Esc 关闭（必须输入正确密码）
+                if ($('authModal').classList.contains('active')) return;
                 document.querySelectorAll('.modal-overlay.active').forEach(m => closeModal(m.id));
             }
         });
@@ -982,6 +985,10 @@
             } catch (e) { /* 服务器不可用 */ }
         }
         function openAuthModal() {
+            // 关闭其他弹窗，只保留主密码弹窗（防止绕过）
+            document.querySelectorAll('.modal-overlay.active').forEach(m => {
+                if (m.id !== 'authModal') closeModal(m.id);
+            });
             $('authTitle').textContent = authNeedsSetup ? '🔒 首次设置访问密码' : '🔒 输入访问密码';
             $('authLabel').textContent = authNeedsSetup ? '设置访问密码（至少 4 位）' : '输入访问密码';
             $('authTip').textContent = authNeedsSetup
