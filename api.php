@@ -25,6 +25,8 @@ header('Cache-Control: no-store, no-cache, must-revalidate');
 
 // ---------- 配置 ----------
 define('SESSION_DIR', __DIR__ . '/data/sessions');
+define('DEVICES_FILE', __DIR__ . '/data/devices.json');
+define('SMS_SEEN_FILE', __DIR__ . '/data/sms_seen.json');
 define('SESSION_TTL', 1800); // 会话缓存 30 分钟
 define('REQUEST_TIMEOUT', 15);
 
@@ -58,6 +60,24 @@ function validate_url($url) {
         throw new Exception('设备地址格式不正确');
     }
     return $url;
+}
+
+/**
+ * 多字节安全截断（不依赖 mbstring 扩展）
+ */
+function mb_cut($str, $max) {
+    if (function_exists('mb_substr')) {
+        return mb_substr($str, 0, $max, 'UTF-8');
+    }
+    $len = 0;
+    $out = '';
+    $chars = preg_split('//u', $str, -1, PREG_SPLIT_NO_EMPTY);
+    foreach ($chars as $c) {
+        if ($len >= $max) break;
+        $out .= $c;
+        $len++;
+    }
+    return $out;
 }
 
 function session_file($url) {
@@ -290,6 +310,84 @@ try {
         case 'health':
             $sessions = is_dir(SESSION_DIR) ? count(glob(SESSION_DIR . '/*.json') ?: []) : 0;
             json_out('ok', 'SimAdmin proxy running', ['sessions' => $sessions]);
+            break;
+
+        case 'devices':
+            // GET：读取服务器端设备配置（跨设备同步）
+            // POST：保存设备配置到服务器（覆盖式）
+            if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+                if (!file_exists(DEVICES_FILE)) {
+                    json_out('ok', '无设备配置', []);
+                }
+                $data = json_decode(file_get_contents(DEVICES_FILE), true);
+                json_out('ok', '设备配置', is_array($data) ? $data : []);
+                break;
+            }
+            $body = read_body();
+            $list = isset($body['devices']) ? $body['devices'] : null;
+            if (!is_array($list)) json_out('error', 'devices 必须为数组');
+            // 清洗：只保留白名单字段，跳过非法条目（防止注入脏数据）
+            $clean = [];
+            foreach ($list as $d) {
+                if (!is_array($d)) continue;
+                try {
+                    $url = validate_url(isset($d['url']) ? $d['url'] : '');
+                } catch (Exception $e) {
+                    continue; // 非法地址跳过该条，保留其余合法条目
+                }
+                $name = trim(isset($d['name']) ? (string) $d['name'] : '');
+                if ($url === '' || $name === '') continue;
+                $clean[] = [
+                    'id' => substr(preg_replace('/[^a-zA-Z0-9_-]/', '', isset($d['id']) ? (string) $d['id'] : ''), 0, 32),
+                    'name' => mb_cut($name, 50),
+                    'url' => $url,
+                    'password' => isset($d['password']) ? (string) $d['password'] : '',
+                ];
+            }
+            if (!is_dir(dirname(DEVICES_FILE))) {
+                @mkdir(dirname(DEVICES_FILE), 0755, true);
+            }
+            file_put_contents(DEVICES_FILE, json_encode($clean, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
+            @chmod(DEVICES_FILE, 0600);
+            json_out('ok', '已保存 ' . count($clean) . ' 台设备', ['count' => count($clean)]);
+            break;
+
+        case 'sms-seen':
+            // 已读短信记录：GET 读取 / POST 合并保存（跨设备共享已读状态）
+            if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+                if (!file_exists(SMS_SEEN_FILE)) {
+                    json_out('ok', '无已读记录', []);
+                }
+                $data = json_decode(file_get_contents(SMS_SEEN_FILE), true);
+                json_out('ok', '已读记录', is_array($data) ? $data : []);
+                break;
+            }
+            $body = read_body();
+            $seen = isset($body['seen']) ? $body['seen'] : null;
+            if (!is_array($seen)) json_out('error', 'seen 必须为对象');
+            // 清洗：key 限 32 字符字母数字，value 限非负整数
+            $clean = [];
+            foreach ($seen as $devId => $maxId) {
+                $devId = substr(preg_replace('/[^a-zA-Z0-9_-]/', '', (string) $devId), 0, 32);
+                $maxId = (int) $maxId;
+                if ($devId === '' || $maxId < 0) continue;
+                $clean[$devId] = $maxId;
+            }
+            if (!is_dir(dirname(SMS_SEEN_FILE))) {
+                @mkdir(dirname(SMS_SEEN_FILE), 0755, true);
+            }
+            // 合并写入（取较大值，避免旧端覆盖新端）
+            $existing = [];
+            if (file_exists(SMS_SEEN_FILE)) {
+                $existing = json_decode(file_get_contents(SMS_SEEN_FILE), true);
+                if (!is_array($existing)) $existing = [];
+            }
+            foreach ($clean as $devId => $maxId) {
+                $existing[$devId] = max(isset($existing[$devId]) ? (int) $existing[$devId] : 0, $maxId);
+            }
+            file_put_contents(SMS_SEEN_FILE, json_encode($existing, JSON_UNESCAPED_UNICODE), LOCK_EX);
+            @chmod(SMS_SEEN_FILE, 0600);
+            json_out('ok', '已保存已读记录', ['count' => count($existing)]);
             break;
 
         default:

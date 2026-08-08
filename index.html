@@ -323,6 +323,26 @@
         function saveDevices() {
             const slim = devices.map(d => ({ id: d.id, name: d.name, url: d.url, password: d.password }));
             localStorage.setItem(STORAGE_KEY, JSON.stringify(slim));
+            // 同步到服务器（部署目录 data/devices.json，跨设备共享）
+            fetch('api.php?action=devices', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ devices: slim })
+            }).catch(() => {});
+        }
+
+        // 启动时从服务器拉取设备配置（同步）；服务器无配置则用本地 localStorage
+        async function syncDevicesFromServer() {
+            try {
+                const res = await fetch('api.php?action=devices');
+                const json = await res.json().catch(() => null);
+                if (json && json.status === 'ok' && Array.isArray(json.data) && json.data.length > 0) {
+                    devices = json.data.map(d => ({ ...d, data: null, error: null, loading: false, lastUpdate: null }));
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(devices.map(d => ({ id: d.id, name: d.name, url: d.url, password: d.password }))));
+                    return true;
+                }
+            } catch (e) { /* 服务器不可用时用本地配置 */ }
+            return false;
         }
 
         // IP → 完整 URL（默认补 http:// 和 :3000）
@@ -662,7 +682,7 @@
         // ===== 短信 =====
         let smsDevId = null;      // 当前短信弹窗对应的设备
 
-        // --- 已读记录 ---
+        // --- 已读记录（localStorage 缓存 + 服务器同步，跨设备共享已读状态） ---
         function loadSeenSms() {
             try { return JSON.parse(localStorage.getItem(SMS_SEEN_KEY)) || {}; } catch (e) { return {}; }
         }
@@ -673,6 +693,27 @@
             const seen = loadSeenSms();
             seen[devId] = Math.max(seen[devId] || 0, maxId || 0);
             localStorage.setItem(SMS_SEEN_KEY, JSON.stringify(seen));
+            // 同步到服务器（跨设备：A 端已读，B 端不再提醒）
+            fetch('api.php?action=sms-seen', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ seen: { [devId]: seen[devId] } })
+            }).catch(() => {});
+        }
+        // 启动时从服务器拉取已读记录并合并（取较大值，不覆盖本地新记录）
+        async function syncSeenSmsFromServer() {
+            try {
+                const res = await fetch('api.php?action=sms-seen');
+                const json = await res.json().catch(() => null);
+                if (json && json.status === 'ok' && json.data && typeof json.data === 'object') {
+                    const seen = loadSeenSms();
+                    let changed = false;
+                    for (const [devId, maxId] of Object.entries(json.data)) {
+                        if ((seen[devId] || 0) < maxId) { seen[devId] = maxId; changed = true; }
+                    }
+                    if (changed) localStorage.setItem(SMS_SEEN_KEY, JSON.stringify(seen));
+                }
+            } catch (e) { /* 服务器不可用时用本地 */ }
         }
         // 未读统计（仅 incoming 且 id > 已读记录）
         function countUnreadSms(dev) {
@@ -901,7 +942,17 @@
 
         // ===== 初始化 =====
         renderAll();
-        if (devices.length > 0) refreshAll();
+        // 先同步服务器已读记录（跨设备共享），再同步设备配置
+        syncSeenSmsFromServer().then(() => {
+            return syncDevicesFromServer();
+        }).then(usedServer => {
+            if (usedServer) {
+                renderAll();
+                refreshAll();
+            } else if (devices.length > 0) {
+                refreshAll();
+            }
+        });
         // 全局轮询：每 10 秒检查所有设备新短信（未读角标；短信弹窗开着时同步刷新面板）
         setInterval(() => {
             devices.forEach(d => {
