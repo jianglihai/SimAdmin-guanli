@@ -515,16 +515,22 @@ function fetch_device_full($url) {
         $parsed = json_decode($body, true);
         return ($status === 200 && is_array($parsed)) ? $parsed : null;
     };
+    // SimAdmin 设备每个接口返回 {status,message,data:{...}}；
+    // 前端按扁平结构读取（network.signal_strength / sim.present / device.model / stats.cpu_load ...），
+    // 故此处抽取各分区的 .data 落库（health 无 .data 包裹，保持原样以便取 version）。
+    $flat = function ($x) {
+        return (is_array($x) && isset($x['data']) && is_array($x['data'])) ? $x['data'] : $x;
+    };
     $health   = $get('/api/health');
-    $device   = $get('/api/device');
-    $sim      = $get('/api/sim');
-    $network  = $get('/api/network');
-    $stats    = $get('/api/stats');
-    $volte    = null; try { $volte    = $get('/api/volte/control'); }    catch (Exception $e) {}
-    $dataConn = null; try { $dataConn = $get('/api/data'); }             catch (Exception $e) {}
-    $roaming  = null; try { $roaming  = $get('/api/roaming'); }          catch (Exception $e) {}
-    $airplane = null; try { $airplane = $get('/api/airplane-mode'); }    catch (Exception $e) {}
-    $ota      = null; try { $ota      = $get('/api/ota/status'); }       catch (Exception $e) {}
+    $device   = $flat($get('/api/device'));
+    $sim      = $flat($get('/api/sim'));
+    $network  = $flat($get('/api/network'));
+    $stats    = $flat($get('/api/stats'));
+    $volte    = null; try { $volte    = $flat($get('/api/volte/control')); }    catch (Exception $e) {}
+    $dataConn = null; try { $dataConn = $flat($get('/api/data')); }             catch (Exception $e) {}
+    $roaming  = null; try { $roaming  = $flat($get('/api/roaming')); }          catch (Exception $e) {}
+    $airplane = null; try { $airplane = $flat($get('/api/airplane-mode')); }    catch (Exception $e) {}
+    $ota      = null; try { $ota      = $flat($get('/api/ota/status')); }       catch (Exception $e) {}
     return [
         'health'   => $health,
         'device'   => $device,
