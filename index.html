@@ -607,6 +607,8 @@
             if (refreshMode === 0) return; // 手动模式不自动轮询
             refreshTimer = setInterval(() => {
                 if (document.visibilityState === 'hidden') return;
+                // 短信弹窗打开时不刷新，避免覆盖正在编辑的短信内容
+                if ($('smsModal').classList.contains('active')) return;
                 pollData(refreshMode);
             }, refreshMode * 1000);
         }
@@ -1132,13 +1134,11 @@
                 initAfterAuth();
             }
         })();
-        // 全局轮询：每 10 秒检查所有设备新短信（未读角标；短信弹窗开着时同步刷新面板）
-        // 注意：短信接口仍直连设备（逻辑不变），不走数据库缓存。
-        setInterval(() => {
-            devices.forEach(d => {
-                if (d.data && !d.error) refreshSms(d, { panel: true });
-            });
-        }, 10000);
+        // 短信刷新说明：
+        // 短信列表 / 未读角标改由后端 poller.php 每 5 秒写入 SQLite 缓存，前端通过 pollData() 读库更新角标（低延迟、不直连设备）。
+        // 短信弹窗仅在「打开 / 发送 / 标记已读」时主动刷新（见 openSms / sendSms / refreshSms），
+        // 不再有任何定时轮询去刷新弹窗，因此编辑短信时不会被刷新覆盖、已输入内容不会丢失。
+        // （旧逻辑：每 10 秒直连设备刷新短信面板 —— 已移除，它会导致手动模式仍在刷新、且会清空正在编辑的短信内容。）
         // 设备状态自动刷新：由顶部下拉框控制（5秒/30秒/手动），数据从数据库读取（低延迟）
         setupAutoRefresh();
     </script>
