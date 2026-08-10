@@ -82,6 +82,25 @@ chmod -R 755 data
 ### 4. 访问
 浏览器打开 `http://你的域名或IP/` 即可。
 
+## 一键部署（脚本）
+
+无需宝塔，使用官方一键脚本即可在任意 Debian / Ubuntu（含其他 systemd Linux）服务器上一键拉起服务。脚本会自动：安装 PHP + curl 扩展 → 拉取源码（本地或最新 release）→ 创建 `data/` 与 `data/sessions/` 并收紧权限 → 用 systemd 托管（或 php 内置服务器后台运行）→ 启动后自检。
+
+### 方式 A：已克隆仓库
+```bash
+bash deploy.sh                 # 默认端口 8080，安装到 /opt/simadmin-guanli
+bash deploy.sh --port 9000 --dir /www/simadmin-guanli   # 自定义端口与目录
+```
+
+### 方式 B：GitHub 一键（无需克隆）
+```bash
+curl -fsSL https://raw.githubusercontent.com/jianglihai/SimAdmin-guanli/main/deploy.sh | bash
+```
+
+部署完成后打开 `http://<服务器IP>:<端口>/`，首次访问会要求设置主密码（8–64 位，含两类字符）。
+
+> 可选参数：`--port <端口>`、`--dir <安装目录>`、`--no-systemd`（改用 php 内置服务器后台运行）。
+
 ## 使用
 
 ### 首次部署：设置主密码
