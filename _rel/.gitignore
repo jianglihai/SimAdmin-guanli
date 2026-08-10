@@ -1,0 +1,11 @@
+# 运行时数据（会话缓存、设备配置，含敏感信息，切勿提交）
+data/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/
+.idea/
+*.swp

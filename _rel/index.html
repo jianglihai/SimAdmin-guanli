@@ -845,38 +845,28 @@
         function renderSmsPanel(dev) {
             const body = $('smsBody');
             const msgs = dev.smsMsgs || [];
-            // 保留正在编辑的回复框内容，避免后台刷新 / 重渲染时清空用户输入
-            const numEl = document.getElementById('smsReplyNum');
-            const contentEl = document.getElementById('smsReplyContent');
-            const savedNum = numEl ? numEl.value : '';
-            const savedContent = contentEl ? contentEl.value : '';
             if (!msgs.length) {
                 body.innerHTML = `<div class="sms-empty">📭 暂无短信</div>` + replyBoxHtml(dev);
-            } else {
-                const sorted = [...msgs].reverse(); // DESC → ASC，新的在底部
-                const items = sorted.map(m => {
-                    const incoming = m.direction === 'incoming';
-                    const cls = incoming ? 'incoming' : 'outgoing';
-                    const unread = incoming && m.id > seenSmsMaxId(dev.id);
-                    return `
-                        <div class="sms-msg ${cls} ${unread ? 'unread' : ''}">
-                            <div class="bubble">
-                                <div class="meta">
-                                    <span class="num">${esc(m.phone_number || '—')}</span>
-                                    <span>${fmtSmsTime(m.timestamp)}</span>
-                                </div>
-                                <div>${esc(m.content || '')}</div>
-                            </div>
-                        </div>`;
-                }).join('');
-                body.innerHTML = `<div class="sms-list">${items}</div>` + replyBoxHtml(dev);
+                return;
             }
-            // 恢复用户输入
-            const n = document.getElementById('smsReplyNum');
-            const c = document.getElementById('smsReplyContent');
-            if (n && savedNum) n.value = savedNum;
-            if (c && savedContent) c.value = savedContent;
-            // 最新消息滚到底部
+            const sorted = [...msgs].reverse(); // DESC → ASC，新的在底部
+            const items = sorted.map(m => {
+                const incoming = m.direction === 'incoming';
+                const cls = incoming ? 'incoming' : 'outgoing';
+                const unread = incoming && m.id > seenSmsMaxId(dev.id);
+                return `
+                    <div class="sms-msg ${cls} ${unread ? 'unread' : ''}">
+                        <div class="bubble">
+                            <div class="meta">
+                                <span class="num">${esc(m.phone_number || '—')}</span>
+                                <span>${fmtSmsTime(m.timestamp)}</span>
+                            </div>
+                            <div>${esc(m.content || '')}</div>
+                        </div>
+                    </div>`;
+            }).join('');
+            body.innerHTML = `<div class="sms-list">${items}</div>` + replyBoxHtml(dev);
+            // 最新消息（最后一条 outgoing 或 incoming）滚到底部
             const list = body.querySelector('.sms-list');
             if (list) list.scrollTop = list.scrollHeight;
         }
@@ -939,29 +929,14 @@
         }
 
         // --- 打开/关闭弹窗 ---
-        async function openSms(devId) {
+        function openSms(devId) {
             const dev = findDev(devId);
             if (!dev) return;
             smsDevId = devId;
             $('smsTitle').textContent = `💬 短信 · ${dev.name}`;
+            $('smsBody').innerHTML = '<div class="sms-empty">加载中...</div>';
             openModal('smsModal');
-            // 1) 立即渲染内存中已由轮询器缓存的短信（0 延迟；poller 每 5 秒写入库）
-            if (dev.smsMsgs && dev.smsMsgs.length) {
-                renderSmsPanel(dev);
-            } else {
-                $('smsBody').innerHTML = '<div class="sms-empty">加载中...</div>';
-                // 缓存为空（如手动模式 / 刚打开页面）时，快速从后端数据库读一次
-                // （ttl=0 仅读库、不直连设备，低延迟），直接加载到本设备
-                try {
-                    const result = await apiCall('data', { ttl: 0 });
-                    const r = result && result[dev.id];
-                    if (r && r.ok && r.data && r.data.sms && Array.isArray(r.data.sms)) {
-                        dev.smsMsgs = r.data.sms; // 直接加载，绕过 applyServerData 的弹窗守卫
-                        renderSmsPanel(dev);
-                    }
-                } catch (e) { /* 失败则等后台实时拉取 */ }
-            }
-            // 2) 后台直连设备拉取最新并标记已读（不阻塞显示）
+            // 打开即拉取并标记已读
             refreshSms(dev, { markRead: true, panel: true });
         }
 
