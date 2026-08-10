@@ -28,6 +28,8 @@ USE_SYSTEMD=true
 REPO="jianglihai/SimAdmin-guanli"
 ASSET="simadmin-guanli.tar.gz"
 APP_FILES=(index.html api.php)
+# 下一迭代版本号（当前最新发布为 v1.0.0，下次迭代请发布 v1.0.1）
+VERSION="1.0.1"
 
 # ----- 参数解析 -----
 while [ $# -gt 0 ]; do
@@ -50,6 +52,7 @@ err(){ printf "${C_R}[error]${C_N} %s\n" "$*" >&2; exit 1; }
 if [ "$(id -u)" = "0" ]; then SUDO=""; else SUDO="sudo"; fi
 
 # ----- 1) 定位源码 -----
+log "部署版本: v${VERSION}"
 SRC=""
 if [ -f "${APP_FILES[0]}" ] && [ -f "${APP_FILES[1]}" ]; then
   SRC="$(pwd)"
