@@ -546,6 +546,12 @@
                     d.data = r.data;
                     d.error = null;
                     d.lastUpdate = r.updated_at ? new Date(r.updated_at * 1000) : new Date();
+                    // 低延迟短信：优先用后端缓存（poller 每 5 秒刷新）；
+                    // 若该设备短信弹窗正打开则保留本地数据，避免覆盖刚发出的气泡
+                    if (r.data.sms && Array.isArray(r.data.sms) &&
+                        !(smsDevId === d.id && $('smsModal').classList.contains('active'))) {
+                        d.smsMsgs = r.data.sms;
+                    }
                 } else if (r.error) {
                     d.error = r.error;
                     if (r.data) d.data = r.data; // 回源失败但有旧缓存则保留

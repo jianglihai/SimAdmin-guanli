@@ -24,8 +24,10 @@
  * 要求：PHP curl 扩展、allow_url_fopen 或 curl 均可。
  */
 
-header('Content-Type: application/json; charset=utf-8');
-header('Cache-Control: no-store, no-cache, must-revalidate');
+if (PHP_SAPI !== 'cli') {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+}
 
 // ---------- 配置 ----------
 define('SESSION_DIR', __DIR__ . '/data/sessions');
@@ -531,6 +533,21 @@ function fetch_device_full($url) {
     $roaming  = null; try { $roaming  = $flat($get('/api/roaming')); }          catch (Exception $e) {}
     $airplane = null; try { $airplane = $flat($get('/api/airplane-mode')); }    catch (Exception $e) {}
     $ota      = null; try { $ota      = $flat($get('/api/ota/status')); }       catch (Exception $e) {}
+    // 短信列表：/api/sms/list 返回 {status,message,data:{messages:[...]}}；
+    // 抽 messages 存入缓存，前端即可低延迟读取（发送逻辑不在此处）。
+    $smsRaw = null;
+    try { $smsRaw = $get('/api/sms/list?limit=50&offset=0'); } catch (Exception $e) {}
+    $smsMsgs = [];
+    if (is_array($smsRaw)) {
+        $cand = (isset($smsRaw['data']) && is_array($smsRaw['data'])) ? $smsRaw['data'] : $smsRaw;
+        if (isset($cand['messages']) && is_array($cand['messages'])) {
+            $smsMsgs = $cand['messages'];
+        } elseif (isset($smsRaw['messages']) && is_array($smsRaw['messages'])) {
+            $smsMsgs = $smsRaw['messages'];
+        } elseif (!empty($cand) && array_keys($cand) === range(0, count($cand) - 1)) {
+            $smsMsgs = $cand; // $cand 本身就是消息数组
+        }
+    }
     return [
         'health'   => $health,
         'device'   => $device,
@@ -542,11 +559,13 @@ function fetch_device_full($url) {
         'roaming'  => $roaming,
         'airplane' => $airplane,
         'ota'      => $ota,
+        'sms'      => $smsMsgs,
         'version'  => ($health && isset($health['version'])) ? $health['version'] : null,
     ];
 }
 
-// ---------- 路由 ----------
+// ---------- 路由（仅 Web 请求执行；CLI 被 poller.php require 时跳过） ----------
+if (PHP_SAPI !== 'cli') {
 $action = isset($_GET['action']) ? $_GET['action'] : '';
 
 try {
@@ -800,3 +819,4 @@ try {
 } catch (Exception $e) {
     json_out('error', $e->getMessage());
 }
+} // end if (PHP_SAPI !== 'cli')

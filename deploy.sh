@@ -27,9 +27,9 @@ INSTALL_DIR="/opt/simadmin-guanli"
 USE_SYSTEMD=true
 REPO="jianglihai/SimAdmin-guanli"
 ASSET="simadmin-guanli.tar.gz"
-APP_FILES=(index.html api.php)
+APP_FILES=(index.html api.php poller.php)
 # 当前发布版本号（构建 release 时使用；发布时打对应 vX.Y.Z tag 并上传 simadmin-guanli.tar.gz 资产）
-VERSION="1.0.1"
+VERSION="1.0.2"
 
 # ----- 参数解析 -----
 while [ $# -gt 0 ]; do
@@ -144,11 +144,36 @@ EOF
   $SUDO systemctl daemon-reload
   $SUDO systemctl enable --now simadmin-guanli
   log "已通过 systemd 启动 (端口 ${PORT})"
+  # 后台轮询器：每 5 秒刷新缓存，保证前端低延迟（不依赖页面是否打开）
+  POLLER_UNIT="/etc/systemd/system/simadmin-poller.service"
+  cat > "$POLLER_UNIT" <<EOF
+[Unit]
+Description=SimAdmin-guanli Background Poller (5s cache refresh)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=${PHP_BIN} ${INSTALL_DIR}/poller.php
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl enable --now simadmin-poller 2>/dev/null || true
+  $SUDO systemctl restart simadmin-poller 2>/dev/null || true
+  log "已启动后台轮询器 simadmin-poller (每 5 秒刷新缓存)"
 else
   warn "未使用 systemd，改用 php 内置服务器后台运行"
   nohup "$PHP_BIN" -S "0.0.0.0:${PORT}" -t "$INSTALL_DIR" >/tmp/simadmin-guanli.log 2>&1 &
   echo $! > /tmp/simadmin-guanli.pid
   log "已在后台启动 (PID $(cat /tmp/simadmin-guanli.pid)), 日志 /tmp/simadmin-guanli.log"
+  # 后台轮询器（无 systemd 时）
+  nohup "$PHP_BIN" "$INSTALL_DIR/poller.php" >"$INSTALL_DIR/data/poller.log" 2>&1 &
+  echo $! > /tmp/simadmin-poller.pid
+  log "已后台启动轮询器 (PID $(cat /tmp/simadmin-poller.pid)), 日志 $INSTALL_DIR/data/poller.log"
 fi
 
 # ----- 5) 自检 -----
