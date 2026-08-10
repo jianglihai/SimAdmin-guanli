@@ -9,3 +9,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# 构建产物（发布打包临时目录）
+_rel/
