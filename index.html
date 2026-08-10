@@ -980,8 +980,11 @@
             const url = decodeURIComponent(urlEnc);
             const dev = devices.find(d => d.url === url);
             if (!dev) return;
-            // SimAdmin Web UI 与 API 同端口
-            window.open(dev.url, '_blank', 'noopener');
+            // 通过面板代理打开设备 Web UI：浏览器只需能连面板，
+            // 由面板服务端去抓设备页面再回传，规避「设备与浏览器不在同一网段」打不开的问题。
+            const enc = encodeURIComponent(dev.url);
+            const ap = accessPassword ? '&access_password=' + encodeURIComponent(accessPassword) : '';
+            window.open('api.php?action=web&url=' + enc + ap, '_blank', 'noopener');
         }
 
         async function confirmRemoveDevice(id) {

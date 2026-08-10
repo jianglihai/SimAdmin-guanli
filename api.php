@@ -567,6 +567,79 @@ function fetch_device_full($url) {
     ];
 }
 
+// ---------- Web UI 反向代理 ----------
+// 浏览器只需能访问面板；面板服务端去抓设备 Web 页面/资产/API 再回传，
+// 从而规避「设备与用户浏览器不在同一网段、直连打不开」的问题。
+// 设备 API 复用 forward_device（自带会话 Cookie + 自动重登），故代理后自动鉴权。
+
+/** 将 HTML 中的资源/脚本路径改写为走面板代理（web 动作），并把 /api 基址改写为 webapi 代理 */
+function proxy_web_html_rewrite($html, $encUrl, $accessPw) {
+    $q = $accessPw !== '' ? '&access_password=' . rawurlencode($accessPw) : '';
+    // src="/..." / href="/..." -> web 代理（跳过已是 api.php 的地址，避免二次改写）
+    $html = preg_replace_callback(
+        '#(src|href)\s*=\s*"(\/(?!api\.php)[^"]*)"#i',
+        function ($m) use ($encUrl, $q) {
+            $path = $m[2];
+            return $m[1] . '="/api.php?action=web&url=' . $encUrl . $q . '&p=' . rawurlencode($path) . '"';
+        },
+        $html
+    );
+    // 内联/外链脚本里的 "/api 基址 -> webapi 代理（含 access_password，供 SPA 运行时调用）
+    $html = proxy_web_asset_rewrite($html, $encUrl, $accessPw);
+    return $html;
+}
+
+/** 将 JS/CSS 中的绝对 "/api 基址改写为 webapi 代理（保留后续路径） */
+function proxy_web_asset_rewrite($code, $encUrl, $accessPw) {
+    $q = $accessPw !== '' ? '&access_password=' . rawurlencode($accessPw) : '';
+    return preg_replace(
+        '#"/api(?=/|")#',
+        '"/api.php?action=webapi&url=' . $encUrl . $q . '&p=/api',
+        $code
+    );
+}
+
+/** 代理设备 Web 页面/资产：抓取后改写路径再回传 */
+function proxy_web($deviceUrl, $path, $accessPw) {
+    $deviceUrl = validate_url($deviceUrl);
+    // 仅允许代理「已管理的设备」，防止被当作通用 SSRF 跳板
+    if (find_device_password($deviceUrl) === null) {
+        header('Content-Type: text/plain; charset=utf-8');
+        http_response_code(403);
+        echo '该设备不在管理列表中，禁止代理';
+        exit;
+    }
+    $cookie = get_session_cookie($deviceUrl);
+    $headers = [];
+    if ($cookie) $headers[] = 'Cookie: ' . $cookie;
+    list($status, $respHeaders, $body) = device_request($deviceUrl . $path, 'GET', $headers, null);
+    // 捕获设备下发的会话 Cookie，供后续 webapi（forward_device）复用
+    if (!empty($respHeaders['Set-Cookie'])) {
+        $parts = [];
+        foreach ((array) $respHeaders['Set-Cookie'] as $sc) {
+            $pair = explode(';', $sc)[0];
+            if (strpos($pair, '=') !== false) {
+                $n = explode('=', $pair)[0];
+                if ($n === 'simadmin_session' || stripos($n, 'session') !== false) $parts[] = $pair;
+            }
+        }
+        if ($parts) save_session_cookie($deviceUrl, implode('; ', $parts));
+    }
+    $ct = isset($respHeaders['Content-Type']) ? $respHeaders['Content-Type'] : 'application/octet-stream';
+    $encUrl = rawurlencode($deviceUrl);
+    if (stripos($ct, 'text/html') !== false) {
+        $body = proxy_web_html_rewrite($body, $encUrl, $accessPw);
+    } elseif (preg_match('#(javascript|css)#i', $ct)) {
+        $body = proxy_web_asset_rewrite($body, $encUrl, $accessPw);
+    }
+    http_response_code($status);
+    header('Content-Type: ' . $ct);
+    header('Cache-Control: no-store');
+    echo $body;
+    exit;
+}
+
+
 // ---------- 路由（仅 Web 请求执行；CLI 被 poller.php require 时跳过） ----------
 if (PHP_SAPI !== 'cli') {
 $action = isset($_GET['action']) ? $_GET['action'] : '';
@@ -633,6 +706,41 @@ try {
             if (strpos($path, '/api/') !== 0) json_out('error', '非法 path');
             list($status, $respBody) = forward_device($url, $path, 'POST', $payload);
             http_response_code($status);
+            echo $respBody;
+            exit;
+
+        case 'web':
+            // 代理设备 Web UI 页面（SPA）：浏览器无需直连设备。
+            // url 取自有管理列表的设备；access_password 用于放行并透传给 webapi 改写。
+            $url = validate_url(isset($_GET['url']) ? $_GET['url'] : '');
+            if ($url === '') json_out('error', '缺少 url 参数');
+            $path = isset($_GET['p']) ? $_GET['p'] : '/';
+            $accessPw = extract_access_password();
+            proxy_web($url, $path, $accessPw);
+            break;
+
+        case 'webapi':
+            // 代理设备 Web UI 的 API 调用（SPA 运行时发起），复用 forward_device 自动鉴权。
+            $url = validate_url(isset($_GET['url']) ? $_GET['url'] : '');
+            $path = isset($_GET['p']) ? $_GET['p'] : '';
+            if ($url === '' || $path === '') json_out('error', '缺少 url 或 p');
+            // 仅允许代理「已管理的设备」
+            if (find_device_password($url) === null) {
+                http_response_code(403);
+                header('Content-Type: text/plain; charset=utf-8');
+                echo '该设备不在管理列表中，禁止代理';
+                exit;
+            }
+            $method = $_SERVER['REQUEST_METHOD'];
+            $body = null;
+            if ($method !== 'GET' && $method !== 'HEAD') {
+                $raw = file_get_contents('php://input');
+                $decoded = json_decode($raw, true);
+                $body = is_array($decoded) ? $decoded : null;
+            }
+            list($status, $respBody) = forward_device($url, $path, $method, $body);
+            http_response_code($status);
+            header('Content-Type: application/json; charset=utf-8');
             echo $respBody;
             exit;
 
