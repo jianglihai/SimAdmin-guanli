@@ -980,11 +980,8 @@
             const url = decodeURIComponent(urlEnc);
             const dev = devices.find(d => d.url === url);
             if (!dev) return;
-            // 通过面板代理打开设备 Web UI：浏览器只需能连面板，
-            // 由面板服务端去抓设备页面再回传，规避「设备与浏览器不在同一网段」打不开的问题。
-            const enc = encodeURIComponent(dev.url);
-            const ap = accessPassword ? '&access_password=' + encodeURIComponent(accessPassword) : '';
-            window.open('api.php?action=web&url=' + enc + ap, '_blank', 'noopener');
+            // 直接跳转「添加设备时填写的 IP:端口」(dev.url)，由设备自身 Web UI 处理鉴权与页面。
+            window.open(dev.url, '_blank', 'noopener');
         }
 
         async function confirmRemoveDevice(id) {
