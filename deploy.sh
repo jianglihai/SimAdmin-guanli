@@ -26,6 +26,7 @@ PORT=5000
 INSTALL_DIR="/opt/simadmin-guanli"
 USE_SYSTEMD=true
 REPO="jianglihai/SimAdmin-guanli"
+ASSET="simadmin-guanli.tar.gz"
 APP_FILES=(index.html api.php)
 
 # ----- 参数解析 -----
@@ -54,19 +55,28 @@ if [ -f "${APP_FILES[0]}" ] && [ -f "${APP_FILES[1]}" ]; then
   SRC="$(pwd)"
   log "使用本地源码: $SRC"
 else
-  log "本地未找到应用文件，从 GitHub 下载最新 release ..."
+  log "本地未找到应用文件，拉取最新发布版本 ..."
   TMP="$(mktemp -d)"
-  URL="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-        | grep -m1 '"tarball_url"' \
-        | sed -E 's/.*"tarball_url": *"([^"]+)".*/\1/')" || true
-  if [ -z "${URL:-}" ]; then
-    warn "未找到 release，改用 main 分支源码包"
-    URL="https://codeload.github.com/${REPO}/zip/refs/heads/main"
+  SRC_ZIP=0
+  # 1) 优先用 release 资产重定向地址（不依赖 GitHub REST API，避免未认证限流 403）
+  if curl -fsSL -L -o "$TMP/src.tar.gz" "https://github.com/${REPO}/releases/latest/download/${ASSET}"; then
+    log "已从最新 release 下载资产: ${ASSET}"
+  # 2) 兜底：REST API 的 tarball（仍可能被限流）
+  elif URL="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep -m1 '"tarball_url"' | sed -E 's/.*"tarball_url": *"([^"]+)".*/\1/')" && [ -n "${URL:-}" ]; then
+    curl -fsSL -L -o "$TMP/src.tar.gz" "$URL"
+    log "已从 REST API 下载最新 release tarball"
+  # 3) 最终兜底：main 分支源码包
+  else
+    warn "无法获取 release，改用 main 分支源码包"
+    curl -fsSL -L -o "$TMP/src.zip" "https://codeload.github.com/${REPO}/zip/refs/heads/main"
+    SRC_ZIP=1
   fi
-  log "下载: $URL"
-  curl -fsSL -L "$URL" -o "$TMP/src.zip"
   command -v unzip >/dev/null 2>&1 || $SUDO apt-get install -y unzip >/dev/null 2>&1 || true
-  unzip -o -q "$TMP/src.zip" -d "$TMP"
+  if [ "$SRC_ZIP" = "1" ]; then
+    unzip -o -q "$TMP/src.zip" -d "$TMP"
+  else
+    tar -xzf "$TMP/src.tar.gz" -C "$TMP"
+  fi
   SRC="$(find "$TMP" -maxdepth 2 -name index.html | head -1 | xargs dirname)"
   [ -n "$SRC" ] || err "解压后未找到 index.html"
   log "已下载到: $SRC"
