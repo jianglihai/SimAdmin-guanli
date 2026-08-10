@@ -88,7 +88,7 @@ chmod -R 755 data
 
 ### 方式 A：已克隆仓库
 ```bash
-bash deploy.sh                 # 默认端口 8080，安装到 /opt/simadmin-guanli
+bash deploy.sh                 # 默认端口 5000，安装到 /opt/simadmin-guanli
 bash deploy.sh --port 9000 --dir /www/simadmin-guanli   # 自定义端口与目录
 ```
 

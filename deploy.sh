@@ -4,12 +4,12 @@
 #
 # 用法:
 #   1) 已克隆仓库后，本地部署:
-#        bash deploy.sh [--port 8080] [--dir /opt/simadmin-guanli]
+#        bash deploy.sh [--port 5000] [--dir /opt/simadmin-guanli]
 #   2) GitHub 一键拉取并部署 (无需克隆):
 #        curl -fsSL https://raw.githubusercontent.com/jianglihai/SimAdmin-guanli/main/deploy.sh | bash
 #
 # 参数:
-#   --port <整数>      监听端口，默认 8080
+#   --port <整数>      监听端口，默认 5000
 #   --dir  <路径>      安装目录，默认 /opt/simadmin-guanli
 #   --no-systemd       不使用 systemd，改用 php 内置服务器后台运行
 #   -h | --help        显示本帮助
@@ -22,7 +22,7 @@
 #
 set -euo pipefail
 
-PORT=8080
+PORT=5000
 INSTALL_DIR="/opt/simadmin-guanli"
 USE_SYSTEMD=true
 REPO="jianglihai/SimAdmin-guanli"
