@@ -87,21 +87,24 @@ if ! command -v php >/dev/null 2>&1; then
   log "未检测到 PHP，开始安装 ..."
   if command -v apt-get >/dev/null 2>&1; then
     $SUDO apt-get update -y
-    $SUDO apt-get install -y php-cli php-curl unzip
+    $SUDO apt-get install -y php-cli php-curl php-sqlite3 unzip
   elif command -v dnf >/dev/null 2>&1; then
-    $SUDO dnf install -y php-cli php-common unzip
+    $SUDO dnf install -y php-cli php-common php-pdo php-sqlite3 unzip
   elif command -v yum >/dev/null 2>&1; then
-    $SUDO yum install -y php-cli php-common unzip
+    $SUDO yum install -y php-cli php-common php-pdo php-sqlite3 unzip
   elif command -v apk >/dev/null 2>&1; then
-    $SUDO apk add php-cli php-curl unzip
+    $SUDO apk add php-cli php-curl php-sqlite3 unzip
   else
-    err "无法自动安装 PHP，请手动安装 php-cli 及 curl 扩展"
+    err "无法自动安装 PHP，请手动安装 php-cli 及 curl/sqlite3 扩展"
   fi
 fi
 PHP_BIN="$(command -v php)"
 log "PHP: $($PHP_BIN -v | head -1)"
 if ! $PHP_BIN -m | grep -qi curl; then
   err "PHP 缺少 curl 扩展，请安装 php-curl 后重试"
+fi
+if ! $PHP_BIN -m | grep -qiE 'sqlite3|pdo_sqlite'; then
+  err "PHP 缺少 SQLite 扩展，请安装 php-sqlite3 后重试"
 fi
 
 # ----- 3) 安装到目标目录 -----

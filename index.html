@@ -251,6 +251,11 @@
             </div>
             <div class="topbar-actions">
                 <span class="refresh-indicator" id="refreshIndicator"></span>
+                <select id="refreshMode" class="btn" onchange="onRefreshModeChange()" title="刷新模式（数据从数据库读取，低延迟）">
+                    <option value="5">5秒自动刷新</option>
+                    <option value="30" selected>30秒自动刷新</option>
+                    <option value="0">手动刷新</option>
+                </select>
                 <button class="btn" id="themeToggle" onclick="toggleTheme()" title="切换白天/黑夜模式">🌙 夜间</button>
                 <button class="btn" onclick="refreshAll()">🔄 刷新全部</button>
                 <button class="btn" onclick="openManageDevices()">⚙️ 管理设备</button>
@@ -283,9 +288,9 @@
                 <div class="tip">默认补全为 http://{IP}:3000，可带端口如 192.168.68.1:8080</div>
             </div>
             <div class="form-group">
-                <label>管理员密码</label>
-                <input type="password" id="addPassword" placeholder="设备管理员密码">
-                <div class="tip">设备配置保存在服务器（data/devices.json），多端同步共享；代理用于登录获取会话</div>
+                <label>管理员密码（可选）</label>
+                <input type="password" id="addPassword" placeholder="设备管理员密码，留空表示未开启验证">
+                <div class="tip">留空 = 该 SimAdmin 未开启密码验证，代理直连无需鉴权；填写 = 开启密码验证，代理登录获取会话</div>
             </div>
             <div class="form-actions">
                 <button class="btn btn-primary" onclick="confirmAddDevice()">添加</button>
@@ -380,7 +385,7 @@
                     throw new Error('NEED_AUTH');
                 }
                 const serverList = (json && json.status === 'ok' && Array.isArray(json.data)) ? json.data : [];
-                devices = serverList.map(d => ({ ...d, data: null, error: null, loading: false, lastUpdate: null }));
+                devices = serverList.map(d => ({ ...d, data: null, error: null, loading: false, lastUpdate: null, smsMsgs: [] }));
                 return serverList.length > 0;
             } catch (e) { /* 服务器不可用时保持空列表 */ }
             return false;
@@ -527,73 +532,82 @@
             await apiCall('login', { url: dev.url, password: dev.password });
         }
 
-        // ===== 拉取单台设备全部状态 =====
-        // opts.silent=true：轮询模式，只局部更新该卡片（不闪整页）
-        async function fetchDevice(dev, opts = {}) {
-            dev.loading = true;
-            dev.error = null;
-            if (!opts.silent) renderAll();
+        // ===== 拉取设备数据（走后端数据库缓存，低延迟） =====
+        // 后端 ?action=refresh 抓取全部设备写库；?action=data 从库读（ttl 控制回源频率）。
+        // 短信(SMS)仍由独立 10 秒轮询直连设备（逻辑不变）。
+
+        // 将后端返回的结果映射到内存设备对象
+        function applyServerData(result) {
+            if (!result || typeof result !== 'object') return;
+            devices.forEach(d => {
+                const r = result[d.id];
+                if (!r) return;
+                if (r.ok && r.data) {
+                    d.data = r.data;
+                    d.error = null;
+                    d.lastUpdate = r.updated_at ? new Date(r.updated_at * 1000) : new Date();
+                } else if (r.error) {
+                    d.error = r.error;
+                    if (r.data) d.data = r.data; // 回源失败但有旧缓存则保留
+                }
+            });
+        }
+
+        // 手动刷新：主动回源抓取全部设备并写库
+        async function refreshAll() {
+            const ind = $('refreshIndicator');
+            ind.innerHTML = '刷新中 <span class="spin-icon">⟳</span>';
             try {
-                await apiLogin(dev);
-                const [health, device, sim, network, stats] = await Promise.all([
-                    apiGet(dev, '/api/health'),
-                    apiGet(dev, '/api/device'),
-                    apiGet(dev, '/api/sim'),
-                    apiGet(dev, '/api/network'),
-                    apiGet(dev, '/api/stats')
-                ]);
-                // VoLTE 状态（新版 SimAdmin 接口；旧版返回错误则忽略）
-                let volte = null;
-                try {
-                    volte = await apiGet(dev, '/api/volte/control');
-                } catch (e) { /* 旧版固件无此接口 */ }
-                // 附加状态：数据连接/漫游/飞行模式/OTA
-                const [dataConn, roaming, airplane, ota] = await Promise.all([
-                    apiGet(dev, '/api/data').catch(() => null),
-                    apiGet(dev, '/api/roaming').catch(() => null),
-                    apiGet(dev, '/api/airplane-mode').catch(() => null),
-                    apiGet(dev, '/api/ota/status').catch(() => null)
-                ]);
-                dev.data = {
-                    health, device, sim, network, stats, volte,
-                    dataConn, roaming, airplane, ota,
-                    version: health && health.version ? health.version : null
-                };
-                dev.error = null;
-                dev.lastUpdate = new Date();
-                // 短信由独立 10 秒轮询负责（fetchDevice 不再重复拉取，避免每 30 秒拉两次）
+                const result = await apiCall('refresh');
+                applyServerData(result);
             } catch (e) {
-                dev.data = null;
-                dev.error = e.message || String(e);
-                if (e.message === 'NEED_AUTH') {
-                    // 主密码失效/未输入 → 弹出登录框
-                    setAccessPassword('');
-                    authNeedsSetup = false;
-                    openAuthModal();
-                    return;
-                }
-                console.error(`[${dev.name}]`, e);
+                showToast('⚠ 刷新失败: ' + e.message);
             } finally {
-                dev.loading = false;
-                if (opts.silent) {
-                    // 轮询模式：局部更新该卡片 + 统计，避免整页重建闪烁
-                    const card = $('card-' + dev.id);
-                    if (card) card.outerHTML = renderDeviceCard(dev);
-                    renderStats();
-                } else {
-                    renderAll();
-                }
+                renderAll();
+                setTimeout(() => { ind.innerHTML = ''; }, 1500);
             }
         }
 
-        function refreshAll() {
-            const ind = $('refreshIndicator');
-            // 文字固定不转，转圈图标单独一个元素
-            ind.innerHTML = '刷新中 <span class="spin-icon">⟳</span>';
-            devices.forEach(d => fetchDevice(d));
-            setTimeout(() => {
-                ind.innerHTML = '';
-            }, 1500);
+        // 自动轮询：从数据库读缓存（ttl 内命中，低延迟；过期才回源）
+        async function pollData(ttl) {
+            try {
+                const result = await apiCall('data', { ttl });
+                applyServerData(result);
+                // 局部更新卡片，避免整页闪烁
+                devices.forEach(d => {
+                    const card = $('card-' + d.id);
+                    if (card) card.outerHTML = renderDeviceCard(d);
+                });
+                renderStats();
+            } catch (e) { /* 轮询瞬时失败忽略 */ }
+        }
+
+        // 单台设备刷新（管理列表🔄按钮）：后端 refresh 抓取全部，这里取该设备结果
+        async function fetchDevice(dev) {
+            try {
+                const result = await apiCall('refresh');
+                applyServerData(result);
+                renderAll();
+            } catch (e) {
+                showToast('⚠ 刷新失败: ' + e.message);
+            }
+        }
+
+        // ===== 自动刷新定时器（受下拉框控制） =====
+        let refreshTimer = null;
+        let refreshMode = 30; // 5 / 30 / 0(手动)
+        function setupAutoRefresh() {
+            if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+            if (refreshMode === 0) return; // 手动模式不自动轮询
+            refreshTimer = setInterval(() => {
+                if (document.visibilityState === 'hidden') return;
+                pollData(refreshMode);
+            }, refreshMode * 1000);
+        }
+        function onRefreshModeChange() {
+            refreshMode = parseInt($('refreshMode').value, 10) || 0;
+            setupAutoRefresh();
+            showToast('已切换为：' + (refreshMode === 0 ? '手动刷新' : refreshMode + '秒自动刷新'));
         }
 
         // ===== 统计卡片 =====
@@ -785,7 +799,7 @@
         }
         // 未读统计（仅 incoming 且 id > 已读记录）
         function countUnreadSms(dev) {
-            const msgs = (dev.data && dev.data.smsMsgs) || [];
+            const msgs = dev.smsMsgs || [];
             const seen = seenSmsMaxId(dev.id);
             return msgs.filter(m => m.direction === 'incoming' && m.id > seen).length;
         }
@@ -802,7 +816,7 @@
                 const data = await apiGet(dev, '/api/sms/list?limit=50&offset=0');
                 const msgs = (data && data.messages) || [];
                 dev.data = dev.data || {};
-                dev.data.smsMsgs = msgs;
+                dev.smsMsgs = msgs;
                 if (markRead) {
                     const maxIncoming = msgs
                         .filter(m => m.direction === 'incoming')
@@ -822,7 +836,7 @@
         // --- 弹窗面板渲染（聊天视图：旧→新，最新在底部） ---
         function renderSmsPanel(dev) {
             const body = $('smsBody');
-            const msgs = (dev.data && dev.data.smsMsgs) || [];
+            const msgs = dev.smsMsgs || [];
             if (!msgs.length) {
                 body.innerHTML = `<div class="sms-empty">📭 暂无短信</div>` + replyBoxHtml(dev);
                 return;
@@ -895,8 +909,8 @@
                 const now = new Date();
                 const pad = n => String(n).padStart(2, '0');
                 const ts = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-                const msgs = (dev.data && dev.data.smsMsgs) || [];
-                dev.data.smsMsgs = [{ id: Date.now(), direction: 'outgoing', phone_number: num, content, timestamp: ts, status: 'sent' }, ...msgs];
+                const msgs = dev.smsMsgs || [];
+                dev.smsMsgs = [{ id: Date.now(), direction: 'outgoing', phone_number: num, content, timestamp: ts, status: 'sent' }, ...msgs];
                 renderSmsPanel(dev);
                 renderAll();
                 // 后台重新拉取对齐真实数据
@@ -952,9 +966,9 @@
         function confirmAddDevice() {
             const name = $('addName').value.trim();
             const ip = $('addIp').value.trim();
-            const password = $('addPassword').value;
-            if (!name || !ip || !password) {
-                showToast('⚠ 名称、IP、密码均必填');
+            const password = $('addPassword').value; // 可留空：设备未开密码验证
+            if (!name || !ip) {
+                showToast('⚠ 名称、IP 必填');
                 return;
             }
             let url;
@@ -967,13 +981,15 @@
             devices.push({
                 id: 'dev_' + Date.now().toString(36),
                 name, url, password,
-                data: null, error: null, loading: false, lastUpdate: null
+                data: null, error: null, loading: false, lastUpdate: null, smsMsgs: []
             });
             saveDevices();
             closeModal('addModal');
             renderAll();
-            fetchDevice(devices[devices.length - 1]);
-            showToast(`✅ 已添加「${name}」（${url}），正在连接...`);
+            refreshAll(); // 后端回源抓取（含新设备），写库后前端读取
+            showToast(password
+                ? `✅ 已添加「${name}」（${url}），已启用密码验证`
+                : `✅ 已添加「${name}」（${url}），未设密码（设备未开验证）`);
         }
 
         // ===== 管理设备列表 =====
@@ -1111,16 +1127,14 @@
             }
         })();
         // 全局轮询：每 10 秒检查所有设备新短信（未读角标；短信弹窗开着时同步刷新面板）
+        // 注意：短信接口仍直连设备（逻辑不变），不走数据库缓存。
         setInterval(() => {
             devices.forEach(d => {
                 if (d.data && !d.error) refreshSms(d, { panel: true });
             });
         }, 10000);
-        // 设备状态自动刷新：每 30 秒静默刷新所有设备状态（局部更新卡片，不闪整页）
-        setInterval(() => {
-            if (document.visibilityState === 'hidden') return; // 页面隐藏时不刷
-            devices.forEach(d => fetchDevice(d, { silent: true }).catch(() => {}));
-        }, 30000);
+        // 设备状态自动刷新：由顶部下拉框控制（5秒/30秒/手动），数据从数据库读取（低延迟）
+        setupAutoRefresh();
     </script>
 </body>
 </html>

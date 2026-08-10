@@ -16,6 +16,10 @@
  *   GET  api.php?action=status   { url, path }            读设备接口（GET）
  *   POST api.php?action=action   { url, path, body }      设备操作（POST）
  *   GET  api.php?action=health                            代理自身健康检查
+ *   GET  api.php?action=devices                             读取设备列表（数据库）
+ *   POST api.php?action=devices  { devices:[...] }        保存设备列表（数据库，密码可空）
+ *   POST api.php?action=refresh                            抓取全部设备数据并写入数据库
+ *   POST api.php?action=data     { ttl }                  低延迟读取缓存（过期则回源；ttl=0 仅读缓存）
  *
  * 要求：PHP curl 扩展、allow_url_fopen 或 curl 均可。
  */
@@ -28,8 +32,132 @@ define('SESSION_DIR', __DIR__ . '/data/sessions');
 define('DEVICES_FILE', __DIR__ . '/data/devices.json');
 define('SMS_SEEN_FILE', __DIR__ . '/data/sms_seen.json');
 define('CONFIG_FILE', __DIR__ . '/data/config.json');
+define('DB_FILE', __DIR__ . '/data/simadmin.db');
 define('SESSION_TTL', 1800); // 会话缓存 30 分钟
 define('REQUEST_TIMEOUT', 15);
+
+// ---------- 数据库（SQLite） ----------
+// 设备配置 + API 抓取缓存统一存库，前端读库即可拿到低延迟数据，
+// 无需每次轮询都回源打设备。
+function db() {
+    static $pdo = null;
+    if ($pdo === null) {
+        if (!extension_loaded('pdo_sqlite') && !extension_loaded('sqlite3')) {
+            throw new Exception('PHP 缺少 SQLite 扩展（pdo_sqlite / sqlite3），无法启用数据库缓存；请在服务器安装 php-sqlite3');
+        }
+        ensure_data_dir(dirname(DB_FILE));
+        $pdo = new PDO('sqlite:' . DB_FILE);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        $pdo->exec('PRAGMA journal_mode=WAL');
+        $pdo->exec('PRAGMA busy_timeout=5000');
+        init_db_schema($pdo);
+        migrate_devices_from_json();
+        @chmod(DB_FILE, 0600);
+    }
+    return $pdo;
+}
+
+function init_db_schema($pdo) {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS devices (
+        id        TEXT PRIMARY KEY,
+        name      TEXT NOT NULL,
+        url       TEXT NOT NULL,
+        password  TEXT,
+        no_auth   INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+    )");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS device_cache (
+        device_id  TEXT PRIMARY KEY,
+        data_json  TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+    )");
+}
+
+/** 读取全部设备（含密码明文，供后端使用） */
+function db_get_devices() {
+    $rows = db()->query("SELECT id, name, url, password, no_auth FROM devices ORDER BY created_at ASC")->fetchAll();
+    return array_map(function ($r) {
+        return [
+            'id'       => $r['id'],
+            'name'     => $r['name'],
+            'url'      => $r['url'],
+            'password' => $r['password'] ?? '',
+            'no_auth'  => (int) $r['no_auth'],
+        ];
+    }, $rows);
+}
+
+/**
+ * 覆盖式保存设备列表。
+ * 若某设备未携带密码（开放模式前端拿不到密码），则保留库中已有密码，避免误清空。
+ */
+function db_save_devices($list) {
+    $pdo = db();
+    $existing = [];
+    foreach ($pdo->query("SELECT id, password FROM devices")->fetchAll() as $r) {
+        $existing[$r['id']] = $r['password'] ?? '';
+    }
+    $pdo->beginTransaction();
+    $pdo->exec("DELETE FROM devices");
+    $stmt = $pdo->prepare("INSERT INTO devices (id, name, url, password, no_auth, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+    foreach ($list as $d) {
+        $pw = isset($d['password']) ? (string) $d['password'] : '';
+        if ($pw === '' && isset($existing[$d['id']]) && $existing[$d['id']] !== '') {
+            $pw = $existing[$d['id']]; // 前端未提供密码时沿用库内已有密码
+        }
+        $noAuth = ($pw === '') ? 1 : 0;
+        $stmt->execute([$d['id'], $d['name'], $d['url'], $pw, $noAuth, time()]);
+    }
+    $pdo->commit();
+}
+
+/** 按设备 URL 查密码（用于代理自动重登 / 判断是否需要鉴权） */
+function db_find_password($url) {
+    $norm = rtrim($url, '/');
+    $stmt = db()->prepare("SELECT password FROM devices WHERE url = ?");
+    $stmt->execute([$norm]);
+    $row = $stmt->fetch();
+    return $row ? ($row['password'] ?? '') : null;
+}
+
+/**
+ * 首次启动兼容：若数据库 devices 表为空，但旧版 data/devices.json 存在，
+ * 则把其中的设备一次性导入数据库（保留密码与 URL）。导入后旧文件仍保留，不删除。
+ */
+function migrate_devices_from_json() {
+    $count = (int) db()->query("SELECT COUNT(*) FROM devices")->fetchColumn();
+    if ($count > 0) return;
+    if (!file_exists(DEVICES_FILE)) return;
+    $list = json_decode(file_get_contents(DEVICES_FILE), true);
+    if (!is_array($list) || empty($list)) return;
+    $stmt = db()->prepare("INSERT OR IGNORE INTO devices (id, name, url, password, no_auth, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+    foreach ($list as $d) {
+        if (!is_array($d)) continue;
+        $url = rtrim(trim($d['url'] ?? ''), '/');
+        $name = trim($d['name'] ?? '');
+        if ($url === '' || $name === '') continue;
+        $pw = isset($d['password']) ? (string) $d['password'] : '';
+        $noAuth = ($pw === '') ? 1 : 0;
+        $stmt->execute([$d['id'] ?? md5($url), $name, $url, $pw, $noAuth, time()]);
+    }
+}
+
+/** 读取设备缓存（来自数据库，低延迟） */
+function db_get_cache($deviceId) {
+    $stmt = db()->prepare("SELECT data_json, updated_at FROM device_cache WHERE device_id = ?");
+    $stmt->execute([$deviceId]);
+    $row = $stmt->fetch();
+    if (!$row) return null;
+    $data = json_decode($row['data_json'], true);
+    return ['data' => is_array($data) ? $data : null, 'updated_at' => (int) $row['updated_at']];
+}
+
+/** 写入设备缓存（API 抓取结果落库） */
+function db_set_cache($deviceId, $data) {
+    $stmt = db()->prepare("INSERT OR REPLACE INTO device_cache (device_id, data_json, updated_at) VALUES (?, ?, ?)");
+    $stmt->execute([$deviceId, json_encode($data, JSON_UNESCAPED_UNICODE), time()]);
+}
 
 // ---------- 主密码保护 ----------
 // 首次访问时若未设置主密码，允许 setup 接口设置；设置后所有接口需带主密码
@@ -303,70 +431,113 @@ function login_device($url, $password) {
 }
 
 /**
- * 从设备配置中查找该设备的密码（用于会话自动重登）
+ * 从设备配置（数据库）中查找该设备的密码（用于会话自动重登 / 判断是否需要鉴权）
+ * 返回字符串：非空=需要密码验证；空字符串=该设备未开启密码验证（no_auth）
  */
 function find_device_password($url) {
-    if (!file_exists(DEVICES_FILE)) return null;
-    $list = json_decode(file_get_contents(DEVICES_FILE), true);
-    if (!is_array($list)) return null;
-    foreach ($list as $d) {
-        if (isset($d['url'], $d['password']) && rtrim($d['url'], '/') === $url) {
-            return $d['password'];
-        }
+    try {
+        return db_find_password($url);
+    } catch (Exception $e) {
+        return null;
     }
-    return null;
 }
 
 /**
- * 转发设备 API 请求；会话缺失/失效时自动重登一次（免手动刷新）
+ * 转发设备 API 请求。
+ * - 设备配置了密码：用会话 Cookie 鉴权；缺失/失效时自动重登一次。
+ * - 设备未配置密码（no_auth）：直接请求，不带 Cookie；若设备实际要求鉴权(401/403)
+ *   则给出清晰提示，不报"会话未建立"。
  */
 function forward_device($url, $path, $method, $body = null) {
-    $cookie = get_session_cookie($url);
-    if (!$cookie) {
-        // 会话缺失：尝试用配置中的密码自动重登
-        $password = find_device_password($url);
-        if ($password !== null) {
+    $password = find_device_password($url); // string（可能为空）或 null
+    $needsAuth = is_string($password) && $password !== '';
+
+    $cookie = null;
+    if ($needsAuth) {
+        $cookie = get_session_cookie($url);
+        if (!$cookie) {
             try {
                 login_device($url, $password);
                 $cookie = get_session_cookie($url);
             } catch (Exception $e) { $cookie = null; }
         }
-        if (!$cookie) {
-            throw new Exception('会话未建立，请先登录该设备');
-        }
     }
-    $headers = ['Cookie: ' . $cookie];
+
+    $headers = [];
+    if ($cookie) $headers[] = 'Cookie: ' . $cookie;
     $payload = null;
     if ($body !== null) {
         $headers[] = 'Content-Type: application/json';
         $payload = json_encode($body, JSON_UNESCAPED_UNICODE);
     }
+
     list($status, $_unused, $respBody) = device_request(
         $url . $path,
         $method,
         $headers,
         $payload
     );
-    // 会话过期（401/403）时自动重登一次
-    if (($status === 401 || $status === 403) && $method === 'GET') {
-        $password = find_device_password($url);
-        if ($password !== null) {
-            try {
-                clear_session($url);
-                login_device($url, $password);
-                $newCookie = get_session_cookie($url);
-                if ($newCookie) {
-                    list($status, $_unused, $respBody) = device_request(
-                        $url . $path,
-                        $method,
-                        ['Cookie: ' . $newCookie] + $headers,
-                        $payload
-                    );
-                }
-            } catch (Exception $e) { /* 重登失败则返回原始 401 */ }
+
+    // 未开启密码验证的设备：若实际返回 401/403，说明该设备其实需要密码
+    if (!$needsAuth) {
+        if ($status === 401 || $status === 403) {
+            throw new Exception('该设备返回 401，需要密码验证，请在「管理设备」中补充设备密码');
         }
+        return [$status, $respBody];
+    }
+
+    // 需要密码的设备：会话过期时自动重登一次
+    if (($status === 401 || $status === 403) && $method === 'GET') {
+        try {
+            clear_session($url);
+            login_device($url, $password);
+            $newCookie = get_session_cookie($url);
+            if ($newCookie) {
+                list($status, $_unused, $respBody) = device_request(
+                    $url . $path,
+                    $method,
+                    ['Cookie: ' . $newCookie] + $headers,
+                    $payload
+                );
+            }
+        } catch (Exception $e) { /* 重登失败则返回原始 401 */ }
     }
     return [$status, $respBody];
+}
+
+/**
+ * 从单台设备抓取全部状态接口（同前端 fetchDevice 的字段集合），结果直接落库。
+ * 任一接口失败不影响其余；整体不可达时抛异常由调用方记录。
+ */
+function fetch_device_full($url) {
+    $get = function ($path) use ($url) {
+        list($status, $body) = forward_device($url, $path, 'GET');
+        $parsed = json_decode($body, true);
+        return ($status === 200 && is_array($parsed)) ? $parsed : null;
+    };
+    $health   = $get('/api/health');
+    $device   = $get('/api/device');
+    $sim      = $get('/api/sim');
+    $network  = $get('/api/network');
+    $stats    = $get('/api/stats');
+    $volte    = null; try { $volte    = $get('/api/volte/control'); }    catch (Exception $e) {}
+    $dataConn = null; try { $dataConn = $get('/api/data'); }             catch (Exception $e) {}
+    $roaming  = null; try { $roaming  = $get('/api/roaming'); }          catch (Exception $e) {}
+    $airplane = null; try { $airplane = $get('/api/airplane-mode'); }    catch (Exception $e) {}
+    $ota      = null; try { $ota      = $get('/api/ota/status'); }       catch (Exception $e) {}
+    return [
+        'health'   => $health,
+        'device'   => $device,
+        'sim'      => $sim,
+        'network'  => $network,
+        'stats'    => $stats,
+        'volte'    => $volte,
+        'dataConn' => $dataConn,
+        'roaming'  => $roaming,
+        'airplane' => $airplane,
+        'ota'      => $ota,
+        'version'  => ($health && isset($health['version'])) ? $health['version'] : null,
+    ];
 }
 
 // ---------- 路由 ----------
@@ -446,16 +617,16 @@ try {
             break;
 
         case 'devices':
-            // GET：读取服务器端设备配置（跨设备同步）
+            // GET：读取服务器端设备配置（数据库，跨设备同步）
             //      已设置主密码（调用者已鉴权）→ 返回完整配置（含密码，多端登录需要）
             //      未设置主密码（开放状态）→ 隐藏密码兜底
-            // POST：保存设备配置到服务器（覆盖式）
+            // POST：保存设备配置到数据库（覆盖式）
             if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-                if (!file_exists(DEVICES_FILE)) {
-                    json_out('ok', '无设备配置', []);
+                try {
+                    $data = db_get_devices();
+                } catch (Exception $e) {
+                    $data = [];
                 }
-                $data = json_decode(file_get_contents(DEVICES_FILE), true);
-                $data = is_array($data) ? $data : [];
                 if (!access_password_set()) {
                     $data = strip_passwords($data);
                 }
@@ -480,11 +651,89 @@ try {
                     'id' => substr(preg_replace('/[^a-zA-Z0-9_-]/', '', isset($d['id']) ? (string) $d['id'] : ''), 0, 32),
                     'name' => mb_cut($name, 50),
                     'url' => $url,
+                    // 密码可空：空字符串表示设备未开启密码验证（no_auth）
                     'password' => isset($d['password']) ? (string) $d['password'] : '',
                 ];
             }
-            write_json_file(DEVICES_FILE, $clean, JSON_PRETTY_PRINT);
+            try {
+                db_save_devices($clean);
+            } catch (Exception $e) {
+                json_out('error', '保存设备失败: ' . $e->getMessage());
+            }
             json_out('ok', '已保存 ' . count($clean) . ' 台设备', ['count' => count($clean)]);
+            break;
+
+        case 'refresh':
+            // 主动抓取所有设备最新数据并写入数据库（前端"手动刷新"走这里）
+            $devs = [];
+            try { $devs = db_get_devices(); } catch (Exception $e) {}
+            $result = [];
+            foreach ($devs as $d) {
+                try {
+                    $data = fetch_device_full($d['url']);
+                    db_set_cache($d['id'], $data);
+                    $result[$d['id']] = [
+                        'ok'         => true,
+                        'data'       => $data,
+                        'updated_at' => time(),
+                    ];
+                } catch (Exception $e) {
+                    $result[$d['id']] = ['ok' => false, 'error' => $e->getMessage()];
+                }
+            }
+            json_out('ok', '已刷新 ' . count($devs) . ' 台设备', $result);
+            break;
+
+        case 'data':
+            // 低延迟读：直接从数据库返回缓存数据。
+            // ttl>0 时，若某设备缓存已过期（距 updated_at 超过 ttl 秒）则回源抓取并落库；
+            // ttl=0（手动模式）只返回缓存，不回源。
+            $ttl = isset($_POST['ttl']) ? (int) $_POST['ttl']
+                 : (isset($_GET['ttl']) ? (int) $_GET['ttl'] : 30);
+            $devs = [];
+            try { $devs = db_get_devices(); } catch (Exception $e) {}
+            $now = time();
+            $result = [];
+            foreach ($devs as $d) {
+                $cached = null;
+                try { $cached = db_get_cache($d['id']); } catch (Exception $e) {}
+                $fresh = $cached && $cached['data'] !== null
+                    && ($ttl <= 0 || ($now - $cached['updated_at']) <= $ttl);
+                if ($fresh) {
+                    $result[$d['id']] = [
+                        'ok'         => true,
+                        'data'       => $cached['data'],
+                        'updated_at' => $cached['updated_at'],
+                        'from_cache' => true,
+                    ];
+                    continue;
+                }
+                // 需要回源
+                try {
+                    $data = fetch_device_full($d['url']);
+                    db_set_cache($d['id'], $data);
+                    $result[$d['id']] = [
+                        'ok'         => true,
+                        'data'       => $data,
+                        'updated_at' => $now,
+                        'from_cache' => false,
+                    ];
+                } catch (Exception $e) {
+                    // 回源失败：若有旧缓存则降级返回（标记 stale），否则报错误
+                    if ($cached && $cached['data'] !== null) {
+                        $result[$d['id']] = [
+                            'ok'         => false,
+                            'error'      => $e->getMessage(),
+                            'data'       => $cached['data'],
+                            'updated_at' => $cached['updated_at'],
+                            'stale'      => true,
+                        ];
+                    } else {
+                        $result[$d['id']] = ['ok' => false, 'error' => $e->getMessage()];
+                    }
+                }
+            }
+            json_out('ok', '数据', $result);
             break;
 
         case 'sms-seen':
