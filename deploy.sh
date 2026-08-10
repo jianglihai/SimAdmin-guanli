@@ -75,7 +75,7 @@ else
   if [ "$SRC_ZIP" = "1" ]; then
     unzip -o -q "$TMP/src.zip" -d "$TMP"
   else
-    tar -xzf "$TMP/src.tar.gz" -C "$TMP"
+    tar -xzmf "$TMP/src.tar.gz" -C "$TMP"
   fi
   SRC="$(find "$TMP" -maxdepth 2 -name index.html | head -1 | xargs dirname)"
   [ -n "$SRC" ] || err "解压后未找到 index.html"
