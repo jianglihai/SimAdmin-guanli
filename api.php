@@ -112,6 +112,9 @@ function db_save_devices($list) {
         $stmt->execute([$d['id'], $d['name'], $d['url'], $pw, $noAuth, time()]);
     }
     $pdo->commit();
+    // 清理已删除设备的孤儿缓存：device_cache 不随 devices 表级联删除，
+    // 反复删除+重加会产生大量无效缓存行，且可能干扰前端读取（见前端按 url 查找修复）
+    $pdo->exec("DELETE FROM device_cache WHERE device_id NOT IN (SELECT id FROM devices)");
 }
 
 /** 按设备 URL 查密码（用于代理自动重登 / 判断是否需要鉴权） */

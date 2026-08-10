@@ -369,7 +369,8 @@
         function saveDevices() {
             const slim = devices.map(d => ({ id: d.id, name: d.name, url: d.url, password: d.password }));
             // 只写服务器（后端 data/devices.json 是唯一数据源，跨设备共享）
-            fetch('api.php?action=devices', {
+            // 返回 fetch promise，便于调用方 await，避免删除+重加时后端 devices 表的并发竞态
+            return fetch('api.php?action=devices', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ devices: slim, ...(accessPassword ? { access_password: accessPassword } : {}) })
@@ -695,7 +696,7 @@
                     ` : !d ? `
                         <div class="kv-row"><span class="k">状态</span><span class="v">${dev.loading ? '加载中...' : '未获取'}</span></div>
                     ` : `\n
-                        ${ota && ota.pending_update ? `<div class="ota-banner">📦 固件更新可用：${esc(ota.pending_meta && ota.pending_meta.version || '')} <button class="btn" style="padding:2px 10px;font-size:0.7rem" onclick="openDeviceWeb('${dev.id}')">去更新</button></div>` : ''}
+                        ${ota && ota.pending_update ? `<div class="ota-banner">📦 固件更新可用：${esc(ota.pending_meta && ota.pending_meta.version || '')} <button class="btn" style="padding:2px 10px;font-size:0.7rem" onclick="openDeviceWeb('${encodeURIComponent(dev.url)}')">去更新</button></div>` : ''}
                         <div class="kv-row"><span class="k">固件版本</span><span class="v mono">${esc(d.version || (deviceInfo && deviceInfo.revision) || '—')}</span></div>
                         <div class="kv-row"><span class="k">型号 / IMEI</span><span class="v mono">${esc(deviceInfo ? (deviceInfo.model || '—') + ' / ' + (deviceInfo.imei || '—') : '—')}</span></div>
                         <div class="kv-row"><span class="k">SIM 卡</span><span class="v">${sim && sim.present ? esc((sim.phone_numbers && sim.phone_numbers[0]) || sim.iccid || '已插卡') : '未插卡 / 无 SIM'}</span></div>
@@ -740,8 +741,8 @@
                 </div>
                 <div class="dev-actions">
                     <button class="btn" onclick="fetchDevice(findDev('${dev.id}'))">🔄 刷新</button>
-                    <button class="btn ${countUnreadSms(dev) > 0 ? 'btn-sms-unread' : ''}" onclick="openSms('${dev.id}')">${smsBtnHtml(dev)}</button>
-                    <button class="btn" onclick="openDeviceWeb('${dev.id}')">🌐 Web UI</button>
+                    <button class="btn ${countUnreadSms(dev) > 0 ? 'btn-sms-unread' : ''}" onclick="openSms('${encodeURIComponent(dev.url)}')">${smsBtnHtml(dev)}</button>
+                    <button class="btn" onclick="openDeviceWeb('${encodeURIComponent(dev.url)}')">🌐 Web UI</button>
                     <button class="btn btn-danger" onclick="confirmRemoveDevice('${dev.id}')">🗑️</button>
                 </div>
             </div>`;
@@ -939,10 +940,13 @@
         }
 
         // --- 打开/关闭弹窗 ---
-        async function openSms(devId) {
-            const dev = findDev(devId);
+        async function openSms(urlEnc) {
+            // 用 url 定位设备：删除+重加后设备 id 会变，但 url 稳定，
+            // 因此按钮按 url 查找可避免「重加后点击无反应」的问题
+            const url = decodeURIComponent(urlEnc);
+            const dev = devices.find(d => d.url === url);
             if (!dev) return;
-            smsDevId = devId;
+            smsDevId = dev.id;
             $('smsTitle').textContent = `💬 短信 · ${dev.name}`;
             openModal('smsModal');
             // 1) 立即渲染内存中已由轮询器缓存的短信（0 延迟；poller 每 5 秒写入库）
@@ -972,8 +976,9 @@
         }
 
         // ===== 设备操作 =====
-        function openDeviceWeb(id) {
-            const dev = findDev(id);
+        function openDeviceWeb(urlEnc) {
+            const url = decodeURIComponent(urlEnc);
+            const dev = devices.find(d => d.url === url);
             if (!dev) return;
             // SimAdmin Web UI 与 API 同端口
             window.open(dev.url, '_blank', 'noopener');
@@ -984,7 +989,7 @@
             if (!dev) return;
             if (!confirm(`确定移除设备「${dev.name}」吗？`)) return;
             devices = devices.filter(d => d.id !== id);
-            saveDevices();
+            await saveDevices();
             renderAll();
             showToast(`已移除「${dev.name}」`);
         }
@@ -996,7 +1001,7 @@
             $('addPassword').value = '';
             openModal('addModal');
         }
-        function confirmAddDevice() {
+        async function confirmAddDevice() {
             const name = $('addName').value.trim();
             const ip = $('addIp').value.trim();
             const password = $('addPassword').value; // 可留空：设备未开密码验证
@@ -1016,7 +1021,7 @@
                 name, url, password,
                 data: null, error: null, loading: false, lastUpdate: null, smsMsgs: []
             });
-            saveDevices();
+            await saveDevices(); // 先确保后端 devices 表已写入新设备，再刷新拉数据
             closeModal('addModal');
             renderAll();
             refreshAll(); // 后端回源抓取（含新设备），写库后前端读取
