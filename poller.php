@@ -3,12 +3,13 @@
 /**
  * SimAdmin-guanli 后台轮询器（常驻守护）
  *
- * 每 5 秒（可用环境变量 POLLER_INTERVAL 覆盖，单位秒，最小 1）抓取所有设备的
+ * 每 15 秒（可用环境变量 POLLER_INTERVAL 覆盖，单位秒，最小 1）抓取所有设备的
  * API 状态（health/device/sim/network/stats/volte/dataConn/roaming/airplane/ota/sms）
  * 并写入 SQLite 缓存（device_cache 表）。
  *
- * 这样前端无论是否打开页面，读取的始终是「最近 ≤5 秒」的缓存数据，实现真正低延迟；
+ * 这样前端无论是否打开页面，读取的始终是「最近 ≤15 秒」的缓存数据，实现真正低延迟；
  * 同时轮询过程会预建立设备会话（Cookie），前端直连也更快。
+ * 15s 间隔在「数据新鲜度」与「减少对设备 simadmin 接口的压力」之间取平衡。
  *
  * 注意：本脚本只【读取】设备数据，不负责任何【发送】（发短信等发送逻辑在 api.php / 前端）。
  *
@@ -24,7 +25,7 @@
 require_once __DIR__ . '/api.php';
 
 // 轮询间隔（秒），可用环境变量覆盖
-$interval = (int) (getenv('POLLER_INTERVAL') ?: 5);
+$interval = (int) (getenv('POLLER_INTERVAL') ?: 15);
 if ($interval < 1) $interval = 1;
 
 // 防重复实例：文件锁（进程退出时 OS 自动释放）

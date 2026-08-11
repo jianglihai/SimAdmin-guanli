@@ -660,8 +660,10 @@ try {
         json_out('ok', '主密码已设置');
     }
 
-    // 鉴权：除 setup / health 外，所有接口需通过主密码校验
-    $isOpen = in_array($action, ['setup', 'health']);
+    // 鉴权：除 setup / health / version / data 外，所有接口需通过主密码校验
+    // version 免鉴权：供前端缓存强刷校验（无需密码即可拿到部署版本号）
+    // data 免鉴权：只读数据库缓存，不回源、不含敏感写入，供首屏秒显
+    $isOpen = in_array($action, ['setup', 'health', 'version', 'data']);
     if (!$isOpen && !check_access(extract_access_password())) {
         json_out('error', '需要主密码（access_password）', ['need_auth' => true]);
     }
@@ -752,6 +754,13 @@ try {
             ]);
             break;
 
+        case 'version':
+            // 版本号 = index.html 的文件修改时间。每次上传新 HTML，mtime 变化 → 版本号变化 →
+            // 前端检测到 localStorage 记录与服务端不一致即自动强刷。无需手动改版本号，永不与前端漂移。
+            $ver = 'build-' . @filemtime(__DIR__ . '/index.html');
+            json_out('ok', 'version', ['version' => $ver]);
+            break;
+
         case 'devices':
             // GET：读取服务器端设备配置（数据库，跨设备同步）
             //      已设置主密码（调用者已鉴权）→ 返回完整配置（含密码，多端登录需要）
@@ -821,52 +830,29 @@ try {
             break;
 
         case 'data':
-            // 低延迟读：直接从数据库返回缓存数据。
-            // ttl>0 时，若某设备缓存已过期（距 updated_at 超过 ttl 秒）则回源抓取并落库；
-            // ttl=0（手动模式）只返回缓存，不回源。
-            $ttl = isset($_POST['ttl']) ? (int) $_POST['ttl']
-                 : (isset($_GET['ttl']) ? (int) $_GET['ttl'] : 30);
+            // 只读数据库缓存，绝不回源。
+            // 回源抓取由 poller.php 常驻守护（每 5 秒）完成；前端手动刷新走 action=refresh。
+            // 这样无论设备是否在线 / 响应多慢，action=data 都瞬间返回，彻底避免前端加载卡死。
             $devs = [];
             try { $devs = db_get_devices(); } catch (Exception $e) {}
-            $now = time();
             $result = [];
             foreach ($devs as $d) {
                 $cached = null;
                 try { $cached = db_get_cache($d['id']); } catch (Exception $e) {}
-                $fresh = $cached && $cached['data'] !== null
-                    && ($ttl <= 0 || ($now - $cached['updated_at']) <= $ttl);
-                if ($fresh) {
+                if ($cached && $cached['data'] !== null) {
                     $result[$d['id']] = [
                         'ok'         => true,
                         'data'       => $cached['data'],
                         'updated_at' => $cached['updated_at'],
                         'from_cache' => true,
                     ];
-                    continue;
-                }
-                // 需要回源
-                try {
-                    $data = fetch_device_full($d['url']);
-                    db_set_cache($d['id'], $data);
+                } else {
+                    // 尚无缓存（poller 尚未写入）：返回占位，不回源，前端显示“等待轮询”
                     $result[$d['id']] = [
-                        'ok'         => true,
-                        'data'       => $data,
-                        'updated_at' => $now,
-                        'from_cache' => false,
+                        'ok'       => false,
+                        'error'    => '等待轮询写入',
+                        'no_cache' => true,
                     ];
-                } catch (Exception $e) {
-                    // 回源失败：若有旧缓存则降级返回（标记 stale），否则报错误
-                    if ($cached && $cached['data'] !== null) {
-                        $result[$d['id']] = [
-                            'ok'         => false,
-                            'error'      => $e->getMessage(),
-                            'data'       => $cached['data'],
-                            'updated_at' => $cached['updated_at'],
-                            'stale'      => true,
-                        ];
-                    } else {
-                        $result[$d['id']] = ['ok' => false, 'error' => $e->getMessage()];
-                    }
                 }
             }
             json_out('ok', '数据', $result);
