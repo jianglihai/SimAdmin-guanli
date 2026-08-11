@@ -58,7 +58,7 @@
         .btn {
             padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border);
             background: var(--panel); color: var(--text); cursor: pointer;
-            font-size: 0.85rem; transition: all 0.2s ease;
+            font-size: 0.85rem; transition: all 0.2s ease; text-decoration: none;
             display: inline-flex; align-items: center; gap: 6px;
         }
         .btn:hover { background: var(--panel); border-color: var(--accent); }
@@ -696,7 +696,7 @@
                     ` : !d ? `
                         <div class="kv-row"><span class="k">状态</span><span class="v">${dev.loading ? '加载中...' : '未获取'}</span></div>
                     ` : `\n
-                        ${ota && ota.pending_update ? `<div class="ota-banner">📦 固件更新可用：${esc(ota.pending_meta && ota.pending_meta.version || '')} <button class="btn" style="padding:2px 10px;font-size:0.7rem" onclick="openDeviceWeb('${encodeURIComponent(dev.url)}')">去更新</button></div>` : ''}
+                        ${ota && ota.pending_update ? `<div class="ota-banner">📦 固件更新可用：${esc(ota.pending_meta && ota.pending_meta.version || '')} <a class="btn" style="padding:2px 10px;font-size:0.7rem" href="${dev.url}" target="_blank" rel="noopener">去更新</a></div>` : ''}
                         <div class="kv-row"><span class="k">固件版本</span><span class="v mono">${esc(d.version || (deviceInfo && deviceInfo.revision) || '—')}</span></div>
                         <div class="kv-row"><span class="k">型号 / IMEI</span><span class="v mono">${esc(deviceInfo ? (deviceInfo.model || '—') + ' / ' + (deviceInfo.imei || '—') : '—')}</span></div>
                         <div class="kv-row"><span class="k">SIM 卡</span><span class="v">${sim && sim.present ? esc((sim.phone_numbers && sim.phone_numbers[0]) || sim.iccid || '已插卡') : '未插卡 / 无 SIM'}</span></div>
@@ -713,7 +713,14 @@
                         <div class="kv-row">
                             <span class="k">漫游 / 飞行</span>
                             <span class="v">
-                                ${roaming && roaming.is_roaming ? '<span class="status-badge status-warning">漫游中</span>' : '<span class="status-badge status-offline">未漫游</span>'}
+                                ${(() => {
+                                    if (roaming == null) return '<span class="status-badge status-offline">未知</span>';
+                                    const on = roaming.is_roaming || roaming.roaming === true
+                                        || (net && /roaming/i.test(String(net.registration_status || '')));
+                                    return on
+                                        ? '<span class="status-badge status-warning">漫游中</span>'
+                                        : '<span class="status-badge status-offline">未漫游</span>';
+                                })()}
                                 ${airplane && airplane.enabled ? '<span class="status-badge status-error">飞行模式</span>' : ''}
                             </span>
                         </div>
@@ -742,7 +749,7 @@
                 <div class="dev-actions">
                     <button class="btn" onclick="fetchDevice(findDev('${dev.id}'))">🔄 刷新</button>
                     <button class="btn ${countUnreadSms(dev) > 0 ? 'btn-sms-unread' : ''}" onclick="openSms('${encodeURIComponent(dev.url)}')">${smsBtnHtml(dev)}</button>
-                    <button class="btn" onclick="openDeviceWeb('${encodeURIComponent(dev.url)}')">🌐 Web UI</button>
+                    <a class="btn" href="${dev.url}" target="_blank" rel="noopener">🌐 Web UI</a>
                     <button class="btn btn-danger" onclick="confirmRemoveDevice('${dev.id}')">🗑️</button>
                 </div>
             </div>`;
@@ -976,14 +983,6 @@
         }
 
         // ===== 设备操作 =====
-        function openDeviceWeb(urlEnc) {
-            const url = decodeURIComponent(urlEnc);
-            const dev = devices.find(d => d.url === url);
-            if (!dev) return;
-            // 直接跳转「添加设备时填写的 IP:端口」(dev.url)，由设备自身 Web UI 处理鉴权与页面。
-            window.open(dev.url, '_blank', 'noopener');
-        }
-
         async function confirmRemoveDevice(id) {
             const dev = findDev(id);
             if (!dev) return;
