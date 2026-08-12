@@ -458,7 +458,14 @@
                     throw new Error('NEED_AUTH');
                 }
                 const serverList = (json && json.status === 'ok' && Array.isArray(json.data)) ? json.data : [];
-                devices = serverList.map(d => ({ ...d, data: null, error: null, loading: false, lastUpdate: null, smsMsgs: [] }));
+                // 合并而非整体覆盖：避免「页面加载时异步拉取设备列表」在用户已添加设备后才返回，
+                // 用较旧的服务端列表整体覆盖掉刚添加的设备（表现为「添加设备后刷新，设备消失/报错」）。
+                const existing = new Set(devices.map(d => d.id));
+                serverList.forEach(d => {
+                    if (!existing.has(d.id)) {
+                        devices.push({ ...d, data: null, error: null, loading: false, lastUpdate: null, smsMsgs: [] });
+                    }
+                });
                 return serverList.length > 0;
             } catch (e) { /* 服务器不可用时保持空列表 */ }
             return false;
