@@ -164,6 +164,12 @@ function db_set_cache($deviceId, $data) {
     $stmt->execute([$deviceId, json_encode($data, JSON_UNESCAPED_UNICODE), time()]);
 }
 
+/** 删除设备缓存（设备离线时调用，库内不再残留离线设备数据 —— 方案 B） */
+function db_delete_cache($deviceId) {
+    $stmt = db()->prepare("DELETE FROM device_cache WHERE device_id = ?");
+    $stmt->execute([$deviceId]);
+}
+
 // ---------- 主密码保护 ----------
 // 首次访问时若未设置主密码，允许 setup 接口设置；设置后所有接口需带主密码
 function get_access_password() {
@@ -847,11 +853,12 @@ try {
                         'from_cache' => true,
                     ];
                 } else {
-                    // 尚无缓存（poller 尚未写入）：返回占位，不回源，前端显示“等待轮询”
+                    // 缓存已不存在：poller 判定设备离线并已清理其缓存数据（方案 B）。
+                    // 返回 offline 标记，前端据此正确显示为「离线」，而非用旧缓存误判「在线」。
                     $result[$d['id']] = [
-                        'ok'       => false,
-                        'error'    => '等待轮询写入',
-                        'no_cache' => true,
+                        'ok'      => false,
+                        'error'   => '设备离线',
+                        'offline' => true,
                     ];
                 }
             }

@@ -57,6 +57,10 @@ function poller_run_once() {
             db_set_cache($d['id'], $data);
         } catch (Exception $e) {
             fwrite(STDERR, "[" . date('Y-m-d H:i:s') . "] 设备 {$d['name']} ({$d['url']}) 抓取失败: " . $e->getMessage() . "\n");
+            // 方案 B：设备离线，清理其缓存数据，前端读取时将正确显示为离线而非误判在线
+            try { db_delete_cache($d['id']); } catch (Exception $e2) {
+                fwrite(STDERR, "[" . date('Y-m-d H:i:s') . "] 清理离线设备 {$d['name']} 缓存失败: " . $e2->getMessage() . "\n");
+            }
         }
     }
 }

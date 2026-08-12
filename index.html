@@ -704,6 +704,7 @@
                 if (r.ok && r.data) {
                     d.data = r.data;
                     d.error = null;
+                    d.offline = false;
                     d.lastUpdate = r.updated_at ? new Date(r.updated_at * 1000) : new Date();
                     // 低延迟短信：优先用后端缓存（poller 每 5 秒刷新）；
                     // 若该设备短信弹窗正打开则保留本地数据，避免覆盖刚发出的气泡
@@ -711,8 +712,14 @@
                         !(smsDevId === d.id && $('smsModal').classList.contains('active'))) {
                         d.smsMsgs = r.data.sms;
                     }
+                } else if (r.offline) {
+                    // 方案 B：设备离线，后端已清理缓存；前端标记离线且不残留旧数据
+                    d.offline = true;
+                    d.data = null;
+                    d.error = null;
                 } else if (r.error) {
                     d.error = r.error;
+                    d.offline = false;
                     if (r.data) d.data = r.data; // 回源失败但有旧缓存则保留
                 }
             });
@@ -783,9 +790,9 @@
         // ===== 统计卡片 =====
         function renderStats() {
             const total = devices.length;
-            const online = devices.filter(d => d.data && !d.error).length;
-            const error = devices.filter(d => d.error).length;
-            const offline = total - online - error;
+            const online = devices.filter(d => d.data && !d.error && !d.offline).length;
+            const error = devices.filter(d => d.error && !d.offline).length;
+            const offline = devices.filter(d => d.offline || (!d.data && !d.error)).length;
             const withSim = devices.filter(d => d.data && d.data.sim && d.data.sim.present).length;
 
             $('statsGrid').innerHTML = `
@@ -801,8 +808,8 @@
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">离线 / 异常</div>
-                    <div class="stat-value ${error > 0 ? 'red' : 'yellow'}">${error}<span style="font-size:0.9rem;color:var(--muted)"> / ${offline}</span></div>
-                    <div class="stat-sub" style="color:${error > 0 ? 'var(--red)' : 'var(--muted)'}">${error > 0 ? '⚠ 有设备连接失败' : '全部可达'}</div>
+                    <div class="stat-value ${(error + offline) > 0 ? 'red' : 'yellow'}">${error}<span style="font-size:0.9rem;color:var(--muted)"> / ${offline}</span></div>
+                    <div class="stat-sub" style="color:${(error + offline) > 0 ? 'var(--red)' : 'var(--muted)'}">${(error + offline) > 0 ? '⚠ 有设备不可达' : '全部可达'}</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">已插 SIM 卡</div>
@@ -815,8 +822,9 @@
         // ===== 设备卡片 =====
         function renderDeviceCard(dev) {
             const d = dev.data;
-            const isError = !!dev.error;
-            const isOnline = !!d && !isError;
+            const isOffline = !!dev.offline;
+            const isError = !!dev.error && !isOffline;
+            const isOnline = !!d && !isError && !isOffline;
 
             // 网络
             const net = d && d.network;
@@ -868,7 +876,7 @@
                         <div class="kv-row"><span class="k">错误信息</span><span class="v" style="color:var(--red)">${esc(dev.error)}</span></div>
                         <div class="kv-row"><span class="k">提示</span><span class="v">检查地址、端口、密码</span></div>
                     ` : !d ? `
-                        <div class="kv-row"><span class="k">状态</span><span class="v">${dev.loading ? '加载中...' : '未获取'}</span></div>
+                        <div class="kv-row"><span class="k">状态</span><span class="v">${dev.loading ? '加载中...' : (isOffline ? '设备离线（无缓存数据）' : '未获取')}</span></div>
                     ` : `\n
                         ${ota && ota.pending_update ? `<div class="ota-banner">📦 固件更新可用：${esc(ota.pending_meta && ota.pending_meta.version || '')} <a class="btn" style="padding:2px 10px;font-size:0.7rem" href="${dev.url}" target="_blank" rel="noopener">去更新</a></div>` : ''}
                         <div class="kv-row"><span class="k">固件版本</span><span class="v mono">${esc(d.version || (deviceInfo && deviceInfo.revision) || '—')}</span></div>
