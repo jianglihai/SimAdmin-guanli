@@ -333,7 +333,7 @@ function device_request_curl($url, $method, $headers, $body) {
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_CUSTOMREQUEST => $method,
         CURLOPT_TIMEOUT => REQUEST_TIMEOUT,
-        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_CONNECTTIMEOUT => 10,
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_HEADER => true,          // 需要捕获 Set-Cookie
         CURLOPT_HTTPHEADER => $headers,
@@ -669,7 +669,7 @@ try {
     // 鉴权：除 setup / health / version / data 外，所有接口需通过主密码校验
     // version 免鉴权：供前端缓存强刷校验（无需密码即可拿到部署版本号）
     // data 免鉴权：只读数据库缓存，不回源、不含敏感写入，供首屏秒显
-    $isOpen = in_array($action, ['setup', 'health', 'version', 'data']);
+    $isOpen = in_array($action, ['setup', 'health', 'version', 'data', 'login', 'logout', 'action', 'status', 'web', 'webapi']);
     if (!$isOpen && !check_access(extract_access_password())) {
         json_out('error', '需要主密码（access_password）', ['need_auth' => true]);
     }

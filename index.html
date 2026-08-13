@@ -64,6 +64,21 @@
         .btn:hover { background: var(--panel); border-color: var(--accent); }
         .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: none; color: #fff; }
         .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 210, 255, 0.35); }
+        /* 快捷控制开关 */
+        .ctrl-group { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; padding: 10px 12px; background: var(--bg2); border-radius: 8px; }
+        .ctrl-group .ctrl-label { width: 100%; font-size: 0.75rem; font-weight: 700; color: var(--muted); margin-bottom: 2px; }
+        .ctrl-item { display: flex; align-items: center; gap: 6px; padding: 4px 10px; background: var(--bg); border-radius: 20px; border: 1px solid var(--border); cursor: pointer; user-select: none; font-size: 0.72rem; }
+        .ctrl-item:hover { border-color: var(--accent); }
+        .ctrl-item.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+        .ctrl-item.off { opacity: 0.6; }
+        .ctrl-item .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        .ctrl-item.on .dot { background: #fff; }
+        .ctrl-item.off .dot { background: var(--muted); }
+        .ctrl-item.loading { opacity: 0.5; pointer-events: none; }
+        .ctrl-btn { padding: 4px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; font-size: 0.72rem; }
+        .ctrl-btn:hover { border-color: var(--accent); background: var(--panel); }
+        .ctrl-btn.danger { border-color: var(--red); color: var(--red); }
+        .ctrl-btn.danger:hover { background: var(--red); color: #fff; }
         .btn-danger { border-color: rgba(248, 81, 73, 0.4); color: var(--red); }
         .btn-danger:hover { background: rgba(248, 81, 73, 0.15); }
         .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
@@ -935,6 +950,22 @@
                         </div>
                     `}
                 </div>
+                <div class="ctrl-panel" id="ctrl-${dev.id}">${isOnline ? `
+                    <div class="ctrl-group">
+                        <div class="ctrl-label">⚡ 快捷控制</div>
+                        <span class="ctrl-item ${dataConn && dataConn.active ? 'on' : 'off'}" id="ctrl-dc-${dev.id}" onclick="toggleCtrl('${dev.id}','data','${dataConn && dataConn.active ? 'false' : 'true'}')">
+                            <span class="dot"></span>数据连接
+                        </span>
+                        <span class="ctrl-item ${roaming && roaming.roaming_allowed ? 'on' : 'off'}" id="ctrl-rm-${dev.id}" onclick="toggleCtrl('${dev.id}','roaming','${roaming && roaming.roaming_allowed ? 'false' : 'true'}')">
+                            <span class="dot"></span>漫游
+                        </span>
+                        <span class="ctrl-item ${airplane && airplane.enabled ? 'on' : 'off'}" id="ctrl-ap-${dev.id}" onclick="toggleCtrl('${dev.id}','airplane','${airplane && airplane.enabled ? 'false' : 'true'}')">
+                            <span class="dot"></span>飞行模式
+                        </span>
+                        <button class="ctrl-btn" onclick="ctrlAction('${dev.id}','baseband')" title="重启基带">📡 重启基带</button>
+                        <button class="ctrl-btn danger" onclick="ctrlAction('${dev.id}','reboot')" title="⚠ 重启系统">🔁 重启系统</button>
+                    </div>` : ''}
+                </div>
                 <div class="dev-actions">
                     <button class="btn" onclick="fetchDevice(findDev('${dev.id}'))">🔄 刷新</button>
                     <button class="btn ${countUnreadSms(dev) > 0 ? 'btn-sms-unread' : ''}" onclick="openSms('${encodeURIComponent(dev.url)}')">${smsBtnHtml(dev)}</button>
@@ -1181,6 +1212,68 @@
         }
 
         // ===== 设备操作 =====
+        // 快捷控制：开关切换
+        async function toggleCtrl(id, type, val) {
+            const dev = findDev(id);
+            if (!dev) return;
+            const el = $(`ctrl-${type}-${id}`);
+            if (el) el.classList.add('loading');
+            const paths = { data: '/api/data', roaming: '/api/roaming', airplane: '/api/airplane-mode' };
+            const bodies = { data: { active: val === 'true' }, roaming: { allowed: val === 'true' }, airplane: { enabled: val === 'true' } };
+            const path = paths[type];
+            const body = bodies[type];
+            if (!path || !body) return;
+            try {
+                const res = await fetch('api.php?action=action', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: dev.url, path, body })
+                });
+                const json = await res.json();
+                if (json && json.status === 'ok') {
+                    showToast(`✅ ${type === 'data' ? '数据连接' : type === 'roaming' ? '漫游' : '飞行模式'}已${val === 'true' ? '开启' : '关闭'}`);
+                    // 更新本地状态并刷新
+                    if (dev.data) {
+                        if (type === 'data') dev.data.dataConn = { active: val === 'true' };
+                        else if (type === 'roaming') dev.data.roaming = { ...dev.data.roaming, roaming_allowed: val === 'true' };
+                        else if (type === 'airplane') dev.data.airplane = { ...dev.data.airplane, enabled: val === 'true' };
+                    }
+                    renderAll();
+                } else {
+                    showToast('⚠ ' + ((json && json.message) || '操作失败'));
+                }
+            } catch (e) {
+                showToast('⚠ 操作失败: ' + e.message);
+            } finally {
+                if (el) el.classList.remove('loading');
+            }
+        }
+        // 快捷控制：按钮操作（重启基带/系统）
+        async function ctrlAction(id, type) {
+            const dev = findDev(id);
+            if (!dev) return;
+            const confirmMsg = type === 'reboot' ? '⚠ 确定要重启该设备系统吗？' : null;
+            if (confirmMsg && !confirm(confirmMsg)) return;
+            const paths = { baseband: '/api/baseband/restart', reboot: '/api/system/reboot' };
+            const bodies = { baseband: {}, reboot: { delay_seconds: 1 } };
+            const path = paths[type];
+            const body = bodies[type];
+            if (!path) return;
+            try {
+                showToast(`⏳ 正在${type === 'baseband' ? '重启基带' : '重启系统'}...`);
+                const res = await fetch('api.php?action=action', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: dev.url, path, body })
+                });
+                const json = await res.json();
+                if (json && json.status === 'ok') {
+                    showToast(`✅ ${type === 'baseband' ? '基带重启已触发' : '系统重启已触发'}`);
+                } else {
+                    showToast('⚠ ' + ((json && json.message) || '操作失败'));
+                }
+            } catch (e) {
+                showToast('⚠ 操作失败: ' + e.message);
+            }
+        }
         async function confirmRemoveDevice(id) {
             const dev = findDev(id);
             if (!dev) return;
