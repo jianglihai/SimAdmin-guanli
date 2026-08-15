@@ -29,7 +29,7 @@ REPO="jianglihai/SimAdmin-guanli"
 ASSET="simadmin-guanli.tar.gz"
 APP_FILES=(index.html api.php poller.php)
 # 当前发布版本号（构建 release 时使用；发布时打对应 vX.Y.Z tag 并上传 simadmin-guanli.tar.gz 资产）
-VERSION="1.1.0"
+VERSION="1.0.8"
 
 # ----- 参数解析 -----
 while [ $# -gt 0 ]; do
