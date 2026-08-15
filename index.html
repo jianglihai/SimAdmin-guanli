@@ -51,7 +51,8 @@
             display: flex; align-items: center; justify-content: center;
             font-size: 1.4rem; box-shadow: 0 4px 16px rgba(0, 210, 255, 0.3);
         }
-        .brand h1 { font-size: 1.3rem; font-weight: 600; }
+        .brand h1 { font-size: 1.3rem; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; }
+        .brand .ver { font-size: 0.65rem; font-weight: 400; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 1px 7px; }
         .brand p { color: var(--muted); font-size: 0.8rem; margin-top: 2px; }
         .topbar-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
@@ -185,6 +186,7 @@
         .dev-actions { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); }
         .dev-actions .btn { flex: 1; justify-content: center; font-size: 0.8rem; padding: 7px 10px; }
 
+
         /* 卡片式：默认收起，点击头部展开显示具体数据 */
         .dev-head { cursor: pointer; user-select: none; }
         .device-card:not(.expanded) .dev-body,
@@ -302,7 +304,7 @@
             <div class="brand">
                 <div class="brand-logo">📡</div>
                 <div>
-                    <h1>SimAdmin 多设备管理</h1>
+                    <h1>SimAdmin 多设备管理<span class="ver">v1.0.8</span></h1>
                     <p>Multi-device Console · 聚合管理所有 SimAdmin 设备</p>
                 </div>
             </div>
@@ -603,6 +605,35 @@
             return '<span class="s-volte off">📶 VoLTE 关</span>';
         }
 
+        // ===== VoLTE 开关 =====
+        async function toggleVolte(id) {
+            const dev = findDev(id);
+            if (!dev || !dev.data || !dev.data.volte || typeof dev.data.volte !== 'object') return;
+            const current = dev.data.volte.feature_enabled;
+            const el = document.getElementById('ctrl-volte-' + id);
+            if (el) el.classList.add('loading');
+            try {
+                const res = await fetch('api.php?action=action', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: dev.url, path: '/api/volte/feature', body: { enabled: !current } })
+                });
+                const json = await res.json();
+                if (json && json.status === 'ok') {
+                    showToast('✅ VoLTE ' + (current ? '已关闭' : '已开启'));
+                    if (dev.data) {
+                        if (!dev.data.volte) dev.data.volte = {};
+                        dev.data.volte.feature_enabled = !current;
+                    }
+                    fetchDevice(dev);
+                } else {
+                    showToast('⚠ ' + ((json && json.message) || 'VoLTE 切换失败'));
+                }
+            } catch (e) {
+                showToast('⚠ VoLTE 切换失败: ' + e.message);
+            } finally {
+                if (el) el.classList.remove('loading');
+            }
+        }
         // 卡片摘要用的联网方式（WiFi 优先 > 数据流量 > 无网络）
         function connChip(d) {
             if (!d) return null;
@@ -961,6 +992,9 @@
                         </span>
                         <span class="ctrl-item ${airplane && airplane.enabled ? 'on' : 'off'}" id="ctrl-ap-${dev.id}" onclick="toggleCtrl('${dev.id}','airplane','${airplane && airplane.enabled ? 'false' : 'true'}')">
                             <span class="dot"></span>飞行模式
+                        </span>
+                        <span class="ctrl-item ${d.volte && d.volte.feature_enabled ? 'on' : 'off'}" id="ctrl-volte-${dev.id}" onclick="toggleVolte('${dev.id}')">
+                            <span class="dot"></span>VoLTE
                         </span>
                         <button class="ctrl-btn" onclick="ctrlAction('${dev.id}','baseband')" title="重启基带">📡 重启基带</button>
                         <button class="ctrl-btn danger" onclick="ctrlAction('${dev.id}','reboot')" title="⚠ 重启系统">🔁 重启系统</button>
